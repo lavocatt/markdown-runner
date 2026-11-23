@@ -1311,6 +1311,9 @@ def main(argv=None):
     if a.cmd == "ledger":
         print(ledger())
         return
+    for who in (CODER, REVIEWER):  # fail now, not at the first review
+        who.token()
+        print(f"[bot] {who.role}: {who.login}" + ("" if who.is_app else " (workflow token)"), flush=True)
     if not a.dry_run:
         ensure_labels()
     acts = Actions(a.dry_run)
