@@ -96,7 +96,8 @@ func RunMD(cfg *config.Config, file string) error {
 // stage, stage before the --start-from stage, no such file). A breakpoint on a
 // chunk that doesn't exist in a stage that will run is an error, as it already
 // was when that stage was reached.
-// Files that can't be parsed are left to the run, which reports the error.
+// A file that can't be parsed is an error too: the run would fail on it
+// anyway, so it fails before anything runs.
 func CheckBreakpoints(cfg *config.Config, files []string) ([]string, error) {
 	if len(cfg.Breakpoints) == 0 {
 		return nil, nil
@@ -112,12 +113,12 @@ func CheckBreakpoints(cfg *config.Config, files []string) ([]string, error) {
 		ctx := &runnercontext.Context{Cfg: &sim, RView: view.NewView("mock")}
 		stages, err := parser.ExtractStages(ctx, path.Base(file), path.Dir(file))
 		if err != nil {
-			return nil, nil
+			return nil, err
 		}
 		for _, st := range stages {
 			skip, err := applyStartFrom(&sim, file, st)
 			if err != nil {
-				return nil, nil
+				return nil, nil // a bad --start-from is reported by the run
 			}
 			visits = append(visits, visit{file, st.Name, skip, st})
 		}

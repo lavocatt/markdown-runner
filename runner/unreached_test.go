@@ -79,11 +79,11 @@ func TestCheckBreakpoints(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Empty(t, w)
 	})
-	t.Run("a file that fails to parse drops all warnings", func(t *testing.T) {
+	t.Run("a file that fails to parse is an error before anything runs", func(t *testing.T) {
 		bad := path.Join(tmpDir, "bad.md")
 		assert.NoError(t, os.WriteFile(bad, []byte("```bash {\"stage\":}\necho x\n```\n"), 0o644))
-		w, err := check([]string{bad, mdFile}, config.Location{}, config.Location{Stage: "typo"})
-		assert.NoError(t, err)
+		w, err := check([]string{mdFile, bad}, config.Location{}, config.Location{Stage: "typo"})
+		assert.ErrorContains(t, err, "JSON unmarshal error")
 		assert.Empty(t, w)
 	})
 	t.Run("chunk index out of range is an error", func(t *testing.T) {
