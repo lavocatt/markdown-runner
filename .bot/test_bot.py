@@ -47,6 +47,8 @@ check("under the cap -> review", k(pr(usd=bot.PR_USD - 1)) == "review")
 mk = lambda kind, usd=0: {"kind": kind, "stats": {"usd": usd}}  # noqa: E731
 check("spend counted since the last stuck",
       bot.spent_since_stuck([mk("new", 30), mk("review", 25), mk("stuck"), mk("fix", 4)]) == 4)
+b = bot.budgets([mk("review", 1), mk("review", 1), mk("review", 1), mk("stuck"), mk("review", 2)])
+check("removing stuck restarts the review budget", b["review_rounds"] == 1 and b["usd"] == 2)
 check("spend without stuck", bot.spent_since_stuck([mk("new", 30), mk("review", 25)]) == 55)
 
 iss = lambda n, v=0, labels=(): {"number": n, "title": f"t{n}", "labels": [{"name": x} for x in labels],  # noqa: E731
