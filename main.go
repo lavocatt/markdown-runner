@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -111,6 +112,11 @@ func run() error {
 		err := runner.RunMD(cfg, file)
 		if err != nil {
 			return err
+		}
+	}
+	if !cfg.JustList {
+		for _, warning := range runner.UnreachedBreakpoints(cfg) {
+			fmt.Fprintln(os.Stderr, "WARNING:", warning)
 		}
 	}
 	return nil

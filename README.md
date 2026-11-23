@@ -561,6 +561,11 @@ When debugging is enabled, the runner will prompt you for each chunk
   or until the end if there is none
 - `quit` - Stop execution immediately
 
+A `--break-at` breakpoint that can never be reached (unknown stage, stage
+before the `--start-from` stage, `file@` matching no run file) is reported as a
+warning on stderr once the run is over; the run itself is not stopped. An
+unknown chunk in a reached stage is an error.
+
 Breakpoints written in the documents (`"breakpoint":true`) can be disabled
 altogether with `--ignore-breakpoints`.
 

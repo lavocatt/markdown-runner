@@ -54,8 +54,10 @@ func RunMD(cfg *config.Config, file string) error {
 			ui.EndFile(file, err)
 			return err
 		} else if skip {
+			cfg.Visits = append(cfg.Visits, config.StageVisit{File: file, Stage: currentStage.Name, Skipped: true})
 			continue
 		}
+		cfg.Visits = append(cfg.Visits, config.StageVisit{File: file, Stage: currentStage.Name})
 
 		// Handle break-at flags: start interactive mode when we reach the specified stages/chunks
 		if err := applyBreakpoints(cfg, file, currentStage); err != nil {
@@ -87,6 +89,38 @@ func RunMD(cfg *config.Config, file string) error {
 
 	ui.EndFile(file, terminatingError)
 	return terminatingError
+}
+
+// UnreachedBreakpoints returns one warning per --break-at breakpoint that was
+// never consumed, naming it and saying why it could not be reached. It is meant
+// to be called once every file has been run. A breakpoint on a chunk that
+// doesn't exist in an executed stage is not listed here: it makes the run fail
+// as soon as its stage is reached.
+func UnreachedBreakpoints(cfg *config.Config) []string {
+	var warnings []string
+	for _, bp := range cfg.Breakpoints {
+		fileSeen, skipped := false, false
+		for _, v := range cfg.Visits {
+			if !matchesFile(v.File, bp.File) {
+				continue
+			}
+			fileSeen = true
+			if v.Stage == bp.Stage && v.Skipped {
+				skipped = true
+			}
+		}
+		var why string
+		switch {
+		case !fileSeen:
+			why = fmt.Sprintf("no markdown file matching '%s' is run", bp.File)
+		case skipped:
+			why = fmt.Sprintf("stage '%s' comes before the --start-from stage and is skipped", bp.Stage)
+		default:
+			why = fmt.Sprintf("unknown stage '%s'", bp.Stage)
+		}
+		warnings = append(warnings, fmt.Sprintf("breakpoint '%s' is never reached: %s", bp, why))
+	}
+	return warnings
 }
 
 // matchesFile reports whether the markdown file being executed matches the

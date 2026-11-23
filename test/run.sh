@@ -129,6 +129,15 @@ run_test "Several breakpoints can be set" \
 run_test "Every breakpoint is validated, not only the last one" \
     "! ./markdown-runner --view ci -B test/1 -B test/0 cases -f '.*'cases/happy.md" || ((FAILED_TESTS++))
 
+run_test "A breakpoint on an unknown stage is reported" \
+    "./markdown-runner --view ci -B nope cases -f '.*'cases/happy.md 2>&1 | grep -q 'breakpoint .nope. is never reached: unknown stage'" || ((FAILED_TESTS++))
+
+run_test "A breakpoint on a file that is not run is reported" \
+    "./markdown-runner --view ci -B nofile@test cases -f '.*'cases/happy.md 2>&1 | grep -q 'no markdown file matching'" || ((FAILED_TESTS++))
+
+run_test "A breakpoint before the start stage is reported" \
+    "./markdown-runner --view ci -s main -B init cases -f '.*'cases/start_from.md 2>&1 | grep -q 'before the --start-from stage'" || ((FAILED_TESTS++))
+
 # --- Test Summary ---
 print_msg "33" "\n--- Test Summary ---"
 if [ "${FAILED_TESTS}" -eq 0 ]; then

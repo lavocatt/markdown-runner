@@ -33,6 +33,15 @@ type Config struct {
 	View              string
 	Env               []string
 	Rootdir           string
+	Visits            []StageVisit // every stage met by the runner, used to explain unreached breakpoints
+}
+
+// StageVisit records that the runner met a stage of a file, and whether it
+// skipped it because it precedes the --start-from location.
+type StageVisit struct {
+	File    string
+	Stage   string
+	Skipped bool
 }
 
 // Location designates a stage or a chunk, as given by the --start-from and
@@ -45,6 +54,18 @@ type Location struct {
 	// Chunk is the ID or 0-based index of the targeted chunk, empty for the
 	// whole stage.
 	Chunk string
+}
+
+// String formats the location the way it is given on the command line.
+func (l Location) String() string {
+	s := l.Stage
+	if l.File != "" {
+		s = l.File + "@" + s
+	}
+	if l.Chunk != "" {
+		s += "/" + l.Chunk
+	}
+	return s
 }
 
 // ParseLocation parses a --start-from or --break-at value: stage,
