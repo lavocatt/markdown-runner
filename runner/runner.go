@@ -54,10 +54,8 @@ func RunMD(cfg *config.Config, file string) error {
 			ui.EndFile(file, err)
 			return err
 		} else if skip {
-			cfg.Visits = append(cfg.Visits, config.StageVisit{File: file, Stage: currentStage.Name, Skipped: true})
 			continue
 		}
-		cfg.Visits = append(cfg.Visits, config.StageVisit{File: file, Stage: currentStage.Name})
 
 		// Handle break-at flags: start interactive mode when we reach the specified stages/chunks
 		if err := applyBreakpoints(cfg, file, currentStage); err != nil {
@@ -91,26 +89,65 @@ func RunMD(cfg *config.Config, file string) error {
 	return terminatingError
 }
 
-// UnreachedBreakpoints returns one warning per --break-at breakpoint that was
-// never consumed, naming it and saying why it could not be reached. It is meant
-// to be called once every file has been run. A breakpoint on a chunk that
-// doesn't exist in an executed stage is not listed here: it makes the run fail
-// as soon as its stage is reached.
-func UnreachedBreakpoints(cfg *config.Config) []string {
+// CheckBreakpoints validates the --break-at breakpoints before anything runs.
+// It parses every file that is about to be run and replays the --start-from
+// logic to know which stages will be executed. It returns one warning per
+// breakpoint that can never be reached, naming it and saying why (unknown
+// stage, stage before the --start-from stage, no such file). A breakpoint on a
+// chunk that doesn't exist in a stage that will run is an error, as it already
+// was when that stage was reached.
+// Files that can't be parsed are left to the run, which reports the error.
+func CheckBreakpoints(cfg *config.Config, files []string) ([]string, error) {
+	if len(cfg.Breakpoints) == 0 {
+		return nil, nil
+	}
+	type visit struct {
+		file, stage string
+		skipped     bool
+		s           *stage.Stage
+	}
+	var visits []visit
+	sim := *cfg // simulate --start-from without consuming the real one
+	for _, file := range files {
+		ctx := &runnercontext.Context{Cfg: &sim, RView: view.NewView("mock")}
+		stages, err := parser.ExtractStages(ctx, path.Base(file), path.Dir(file))
+		if err != nil {
+			return nil, nil
+		}
+		for _, st := range stages {
+			skip, err := applyStartFrom(&sim, file, st)
+			if err != nil {
+				return nil, nil
+			}
+			visits = append(visits, visit{file, st.Name, skip, st})
+		}
+	}
 	var warnings []string
 	for _, bp := range cfg.Breakpoints {
-		fileSeen, skipped := false, false
-		for _, v := range cfg.Visits {
-			if !matchesFile(v.File, bp.File) {
+		fileSeen, skipped, found := false, false, false
+		for _, v := range visits {
+			if !matchesFile(v.file, bp.File) {
 				continue
 			}
 			fileSeen = true
-			if v.Stage == bp.Stage && v.Skipped {
+			if v.stage != bp.Stage {
+				continue
+			}
+			if v.skipped {
 				skipped = true
+				continue
+			}
+			found = true
+			if bp.Chunk != "" {
+				if _, err := findChunkByIdOrIndex(v.s, bp.Chunk); err != nil {
+					return nil, err
+				}
 			}
 		}
 		var why string
 		switch {
+		case found:
+			continue
 		case !fileSeen:
 			why = fmt.Sprintf("no markdown file matching '%s' is run", bp.File)
 		case skipped:
@@ -120,7 +157,7 @@ func UnreachedBreakpoints(cfg *config.Config) []string {
 		}
 		warnings = append(warnings, fmt.Sprintf("breakpoint '%s' is never reached: %s", bp, why))
 	}
-	return warnings
+	return warnings, nil
 }
 
 // matchesFile reports whether the markdown file being executed matches the

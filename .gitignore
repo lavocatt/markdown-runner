@@ -2,5 +2,8 @@
 slides/*.html
 slides/*.err
 
+# Binary built by test/run.sh
+/markdown-runner
+
 # Node-related (for local filters / tools)
 node_modules/ 

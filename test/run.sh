@@ -111,6 +111,10 @@ for test_file in cases/*.md; do
             "! ./markdown-runner cases -f '.*'${test_file} -s main/missing" || ((FAILED_TESTS++))
         run_test "Start from with an empty stage (${test_name}) should fail" \
             "! ./markdown-runner cases -f '.*'${test_file} -s start_from@" || ((FAILED_TESTS++))
+    # failing_run.md fails on purpose, it is used by the breakpoint tests below
+    elif [ "${test_name}" == "failing_run" ]; then
+        run_test "Failing run (${test_name}) should fail as expected" \
+            "! ./markdown-runner cases -f '.*'${test_file}" || ((FAILED_TESTS++))
     else
         run_test "Test case ${test_name}" \
             "./markdown-runner cases -f '.*'${test_file}" || ((FAILED_TESTS++))
@@ -137,6 +141,18 @@ run_test "A breakpoint on a file that is not run is reported" \
 
 run_test "A breakpoint before the start stage is reported" \
     "./markdown-runner --view ci -s main -B init cases -f '.*'cases/start_from.md 2>&1 | grep -q 'before the --start-from stage'" || ((FAILED_TESTS++))
+
+run_test "An unreachable breakpoint is reported even when the run fails" \
+    "out=\$(./markdown-runner --view ci -B deplyo cases -f '.*'cases/failing_run.md 2>&1); rc=\$?; [ \$rc -ne 0 ] && echo \"\$out\" | grep -q 'WARNING: breakpoint .deplyo. is never reached: unknown stage'" || ((FAILED_TESTS++))
+
+run_test "An unreachable breakpoint is reported before anything runs" \
+    "./markdown-runner --view ci -B deplyo cases -f '.*'cases/failing_run.md 2>&1 | awk '/WARNING|echo deploy/{print; exit}' | grep -q 'WARNING: breakpoint .deplyo.'" || ((FAILED_TESTS++))
+
+run_test "An unknown chunk in a stage that runs fails before anything runs" \
+    "! ./markdown-runner --view ci -B deploy/nope cases -f '.*'cases/failing_run.md 2>&1 | grep -q 'echo deploy'" || ((FAILED_TESTS++))
+
+run_test "--list does not warn about breakpoints" \
+    "! ./markdown-runner --list -B nope cases 2>&1 | grep -q 'never reached'" || ((FAILED_TESTS++))
 
 # --- Test Summary ---
 print_msg "33" "\n--- Test Summary ---"

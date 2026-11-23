@@ -33,15 +33,6 @@ type Config struct {
 	View              string
 	Env               []string
 	Rootdir           string
-	Visits            []StageVisit // every stage met by the runner, used to explain unreached breakpoints
-}
-
-// StageVisit records that the runner met a stage of a file, and whether it
-// skipped it because it precedes the --start-from location.
-type StageVisit struct {
-	File    string
-	Stage   string
-	Skipped bool
 }
 
 // Location designates a stage or a chunk, as given by the --start-from and

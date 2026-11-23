@@ -85,6 +85,7 @@ func run() error {
 	}
 	cfg.Env = append(cfg.Env, "WORKING_DIR="+workding_directory)
 
+	var runFiles []string
 	for _, file := range markdown_files {
 		// avoid parsing files that aren't markdown
 		extension := path.Ext(file)
@@ -108,15 +109,23 @@ func run() error {
 			pterm.Info.Println(file)
 			continue
 		}
-		// parse and execute if possible
-		err := runner.RunMD(cfg, file)
-		if err != nil {
-			return err
-		}
+		runFiles = append(runFiles, file)
 	}
-	if !cfg.JustList {
-		for _, warning := range runner.UnreachedBreakpoints(cfg) {
-			fmt.Fprintln(os.Stderr, "WARNING:", warning)
+	if cfg.JustList {
+		return nil
+	}
+	// report unreachable breakpoints before running anything
+	warnings, err := runner.CheckBreakpoints(cfg, runFiles)
+	if err != nil {
+		return err
+	}
+	for _, warning := range warnings {
+		fmt.Fprintln(os.Stderr, "WARNING:", warning)
+	}
+	for _, file := range runFiles {
+		// parse and execute if possible
+		if err := runner.RunMD(cfg, file); err != nil {
+			return err
 		}
 	}
 	return nil
