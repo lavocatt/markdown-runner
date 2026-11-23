@@ -1,0 +1,105 @@
+# The coding bots (.bot/bot.py): a stateless reconciler. Each run reads GitHub's state (labels,
+# commit statuses, marker comments), does the next actions and exits.
+#
+# Two GitHub Apps give the bots their identities: the coder (vars.BOT_CODER_APP_ID,
+# secrets.BOT_CODER_APP_KEY) and the reviewer (vars.BOT_REVIEWER_APP_ID, secrets.BOT_REVIEWER_APP_KEY).
+# Neither App has the « workflows » permission: the bots can't edit the pipeline that judges them.
+# Without them, both fall back to GITHUB_TOKEN (github-actions[bot]).
+#
+# - A collaborator labels an issue `bot:todo`: it's in the queue, ordered by 👍 votes.
+# - Coder (Claude Code headless) -> deterministic gate -> PR -> CI + CodeQL -> independent bot
+#   reviewer -> coder answers -> ... -> `bot:ready`: a human reviews. Human remarks go back to the bot.
+# - `bot:stuck`: a budget or the no-progress rule stopped it; remove the label to go on.
+name: bot
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only print what it would do"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  statuses: write
+  actions: write          # dispatch CI on the bot's branches, read failed job logs
+  checks: read
+  security-events: read   # CodeQL alerts of the bot's branches
+
+jobs:
+  bot:   # this name is excluded from the CI state the bot reads (.bot/bot.py ci_state)
+    # only humans wake it up on comments (the bots' own reviews and comments don't),
+    # and only collaborators: on a public repo anyone can comment
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' && github.event.label.name == 'bot:todo') ||
+      (github.event_name != 'issues' && !endsWith(github.actor, '[bot]') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+                github.event.comment.author_association || github.event.review.author_association))
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    # at job level: a skipped run (a bot's own event) never queues behind a running one
+    concurrency:
+      group: bot
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      BOT_CODER_APP_ID: ${{ vars.BOT_CODER_APP_ID }}
+      BOT_CODER_APP_KEY: ${{ secrets.BOT_CODER_APP_KEY }}
+      BOT_REVIEWER_APP_ID: ${{ vars.BOT_REVIEWER_APP_ID }}
+      BOT_REVIEWER_APP_KEY: ${{ secrets.BOT_REVIEWER_APP_KEY }}
+      BOT_MODEL: ${{ vars.BOT_MODEL || 'sonnet' }}          # the coder
+      BOT_REVIEW_MODEL: ${{ vars.BOT_REVIEW_MODEL || 'opus' }}  # a different model reviews
+      BOT_MAX_USD_PER_ROUND: ${{ vars.BOT_MAX_USD_PER_ROUND || '15' }}
+      BOT_HUMANS: ${{ vars.BOT_HUMANS || github.repository_owner }}
+      BOT_AGENT_USER: botrun
+      BOT_LOG_DIR: /tmp/bot-logs
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main                  # the harness always runs main's copy, never a PR's
+          fetch-depth: 0
+          persist-credentials: false # no token in .git/config: the agent can read it
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - name: Tools
+        run: |
+          sudo npm install -g @anthropic-ai/claude-code >/dev/null
+          echo "claude $(claude --version), $(go version), $(python3 --version)"
+          [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || [ "${{ inputs.dry_run }}" = "true" ] || { echo "FATAL: secret CLAUDE_CODE_OAUTH_TOKEN missing"; exit 1; }
+      - name: Sandbox user
+        # the agent runs as botrun with an empty environment: no GitHub token, and it can't read
+        # the harness's (/proc/<pid>/environ of another user is not readable)
+        run: |
+          sudo useradd --create-home --shell /bin/bash botrun
+          sudo mkdir -p /tmp/bot-gomod /tmp/bot-logs && sudo chmod 1777 /tmp/bot-gomod /tmp/bot-logs
+          # botrun reads the worktrees' shared .git (read-only for it)
+          chmod a+x "$HOME" "$(dirname "$GITHUB_WORKSPACE")" "$GITHUB_WORKSPACE"
+          chmod -R a+rX "$GITHUB_WORKSPACE"
+          sudo -n -u botrun env -i PATH="$PATH" HOME=/tmp sh -c 'test -z "${GH_TOKEN:-}" && echo "botrun: no token in env"'
+          echo "BOT_AGENT_PATH=$PATH" >> "$GITHUB_ENV"
+      - name: Bot
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then python3 .bot/bot.py run --dry-run; else python3 .bot/bot.py run; fi
+      - name: Transcripts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-transcripts-${{ github.run_id }}
+          path: /tmp/bot-logs
+          if-no-files-found: ignore

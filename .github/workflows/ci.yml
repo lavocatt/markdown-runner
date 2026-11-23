@@ -8,6 +8,7 @@ on:
       - edited
       - reopened
       - synchronize
+  workflow_dispatch:   # the bot dispatches CI on its branches (its pushes don't trigger workflows)
 jobs:
   test:
     runs-on: ubuntu-latest
