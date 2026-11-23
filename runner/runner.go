@@ -169,7 +169,7 @@ func CheckBreakpoints(cfg *config.Config, files []string) ([]string, error) {
 		case !fileSeen:
 			why = fmt.Sprintf("no markdown file matching '%s' is run", bp.File)
 		case skipped && startUnmatched:
-			why = fmt.Sprintf("the --start-from stage '%s' was not found, so every stage is skipped", cfg.StartFromLocation.Stage)
+			why = fmt.Sprintf("the --start-from location '%s' was not found, so every stage is skipped", cfg.StartFromLocation)
 		case skipped:
 			why = fmt.Sprintf("stage '%s' comes before the --start-from stage and is skipped", bp.Stage)
 		default:

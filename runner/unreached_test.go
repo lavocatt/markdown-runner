@@ -58,7 +58,12 @@ func TestCheckBreakpoints(t *testing.T) {
 	t.Run("unknown start-from stage is named as the cause", func(t *testing.T) {
 		w, err := check(one, config.Location{Stage: "nostage"}, config.Location{Stage: "stage1"})
 		assert.NoError(t, err)
-		assert.Equal(t, []string{"breakpoint 'stage1' is never reached: the --start-from stage 'nostage' was not found, so every stage is skipped"}, w)
+		assert.Equal(t, []string{"breakpoint 'stage1' is never reached: the --start-from location 'nostage' was not found, so every stage is skipped"}, w)
+	})
+	t.Run("unknown start-from file is named as the cause", func(t *testing.T) {
+		w, err := check(one, config.Location{File: "nofile", Stage: "stage2"}, config.Location{Stage: "stage1"})
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"breakpoint 'stage1' is never reached: the --start-from location 'nofile@stage2' was not found, so every stage is skipped"}, w)
 	})
 	t.Run("no such file", func(t *testing.T) {
 		w, err := check(one, config.Location{}, config.Location{File: "nope", Stage: "stage1"})
