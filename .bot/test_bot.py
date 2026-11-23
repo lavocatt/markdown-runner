@@ -101,6 +101,14 @@ check("unhandled path -> changes", bot.enforce(model, [], ["OK one two three"], 
 raw = "\x1b[30;46m\x1b[30;46m INFO \x1b[0m\x1b[0m \x1b[96m/tmp/p/md/demo.md:\x1b[0m\x1b[0m✅"
 m2 = {"verdict": "ready", "summary": "ok", "unhappy": [], "probes": [{"input": "x", "got": "INFO /tmp/p/md/demo.md:✅", "ok": True}]}
 check("probe output found through colour codes", bot.enforce(m2, [], [raw], code_changed=False)["probes"][0]["verified"])
+m3 = {"verdict": "ready", "summary": "ok", "unhappy": [], "probes": [
+    {"input": "x", "got": "[30;46m[30;46m INFO [0m[0m [96m[96m/tmp/rv1/d/a.md:[0m[0m✅", "ok": True},
+    {"input": "y", "got": "[96m[96mecho other [95m[95m[Yes/no/continue/quit][0m[96m[0m[96m: [0m[0m", "ok": True}]}
+raw3 = ["\x1b[30;46m\x1b[30;46m INFO \x1b[0m\x1b[0m \x1b[96m\x1b[96m/tmp/rv1/d/a.md:\x1b[0m\x1b[0m✅",
+        "\x1b[96m\x1b[96mecho other \x1b[95m\x1b[95m[Yes/no/continue/quit]\x1b[0m\x1b[96m\x1b[0m\x1b[96m: \x1b[0m\x1b[0m"]
+check("probe copied with bare colour codes is verified",
+      all(p["verified"] for p in bot.enforce(m3, [], raw3, code_changed=False)["probes"]))
+check("[Yes/no] is not a colour code", "[Yes/no/continue/quit]" in bot._norm("[95m[Yes/no/continue/quit][0m"))
 s, m = bot.parse_final("blah\nSUBJECT: warn on unreachable breakpoint\nSUMMARY: did it.\nmore")
 check("parse_final", s == "warn on unreachable breakpoint" and m.startswith("did it."))
 check("protected glob", bot.protected(".github/workflows/x.yml") and not bot.protected("runner/x.go"))

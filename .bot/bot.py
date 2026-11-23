@@ -1231,7 +1231,9 @@ def hard_findings(rep: dict) -> list[str]:
     return hard
 
 
-ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# escape sequences, and colour codes as a model copies them from a tool's output: without the
+# invisible ESC (« [30;46m ») — digits required, so « [Yes/no] » stays
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\[[0-9;]+m")
 
 
 def _norm(s) -> str:
