@@ -40,6 +40,15 @@ check("handed over -> nothing", k(pr(review="ready", labels={bot.L_READY})) is N
 check("human remark beats ready", k(pr(review="ready", labels={bot.L_READY}, human=[{"id": "c1"}])) == "address")
 check("stuck -> nothing", k(pr(ci="failure", labels={bot.L_STUCK})) is None)
 
+check("PR cost cap stops a review", k(pr(usd=bot.PR_USD)) == "stuck")
+check("PR cost cap stops a fix", k(pr(ci="failure", failing=["a"], usd=bot.PR_USD + 1)) == "stuck")
+check("PR cost cap doesn't block the handover", k(pr(review="ready", usd=bot.PR_USD + 1)) == "handover")
+check("under the cap -> review", k(pr(usd=bot.PR_USD - 1)) == "review")
+mk = lambda kind, usd=0: {"kind": kind, "stats": {"usd": usd}}  # noqa: E731
+check("spend counted since the last stuck",
+      bot.spent_since_stuck([mk("new", 30), mk("review", 25), mk("stuck"), mk("fix", 4)]) == 4)
+check("spend without stuck", bot.spent_since_stuck([mk("new", 30), mk("review", 25)]) == 55)
+
 iss = lambda n, v=0, labels=(): {"number": n, "title": f"t{n}", "labels": [{"name": x} for x in labels],  # noqa: E731
                                  "reactions": {"+1": v}}
 a = bot.decide([], [iss(3, 1), iss(7, 4), iss(2, 1)])

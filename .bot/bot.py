@@ -45,6 +45,11 @@ AGENT_USER = os.environ.get("BOT_AGENT_USER", "")  # "" = same user (local tests
 MODEL = os.environ.get("BOT_MODEL", "sonnet")
 REVIEW_MODEL = os.environ.get("BOT_REVIEW_MODEL", "opus")
 ROUND_USD = os.environ.get("BOT_MAX_USD_PER_ROUND", "15")
+# per PR: past it, no more spending action, `bot:stuck`. Counted since the last « stuck » (a human
+# removing the label grants the PR the same amount again). A round started under the cap may end
+# above it, by one round at most.
+PR_USD = float(os.environ.get("BOT_MAX_USD_PER_PR", "50"))
+SPENDING = {"fix", "address", "review"}
 LOG_DIR = os.environ.get("BOT_LOG_DIR", "/tmp/bot-logs")
 REVIEW_CTX = "bot/review"
 CI_WORKFLOWS = ("ci.yml", "codeql.yml")
@@ -341,11 +346,24 @@ def pr_facts(pr: dict) -> dict:
         "fix_rounds": sum(1 for m in marks if m["kind"] == "fix"),
         "human_rounds": sum(1 for m in marks if m["kind"] == "address" and m.get("source") == "human"),
         "fix_history": [m.get("failing", []) for m in marks if m["kind"] == "fix"],
+        "usd": spent_since_stuck(marks),
     }
+
+
+def spent_since_stuck(marks: list[dict]) -> float:
+    last = max((i for i, m in enumerate(marks) if m["kind"] == "stuck"), default=-1)
+    return add_stats(*[m.get("stats") or {} for m in marks[last + 1 :]])["usd"]
 
 
 # ============================================================================ decision (pure)
 def decide_pr(f: dict) -> dict | None:
+    a = _decide_pr(f)
+    if a and a["kind"] in SPENDING and f.get("usd", 0) >= PR_USD:
+        return {"kind": "stuck", "pr": f["number"], "reason": f"${f['usd']:.2f} spent, the cap is ${PR_USD:.0f} per PR"}
+    return a
+
+
+def _decide_pr(f: dict) -> dict | None:
     act = lambda kind, **kw: {"kind": kind, "pr": f["number"], **kw}  # noqa: E731
     if L_STUCK in f["labels"]:
         return None

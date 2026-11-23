@@ -65,6 +65,7 @@ jobs:
       BOT_MODEL: ${{ vars.BOT_MODEL || 'sonnet' }}          # the coder
       BOT_REVIEW_MODEL: ${{ vars.BOT_REVIEW_MODEL || 'opus' }}  # a different model reviews
       BOT_MAX_USD_PER_ROUND: ${{ vars.BOT_MAX_USD_PER_ROUND || '15' }}
+      BOT_MAX_USD_PER_PR: ${{ vars.BOT_MAX_USD_PER_PR || '50' }}
       BOT_HUMANS: ${{ vars.BOT_HUMANS || github.repository_owner }}
       BOT_AGENT_USER: botrun
       BOT_LOG_DIR: /tmp/bot-logs
