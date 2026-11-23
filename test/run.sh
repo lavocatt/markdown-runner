@@ -149,7 +149,7 @@ run_test "An unreachable breakpoint is reported before anything runs" \
     "./markdown-runner --view ci -B deplyo cases -f '.*'cases/failing_run.md 2>&1 | awk '/WARNING|echo deploy/{print; exit}' | grep -q 'WARNING: breakpoint .deplyo.'" || ((FAILED_TESTS++))
 
 run_test "An unknown chunk in a stage that runs fails before anything runs" \
-    "! ./markdown-runner --view ci -B deploy/nope cases -f '.*'cases/failing_run.md 2>&1 | grep -q 'echo deploy'" || ((FAILED_TESTS++))
+    "out=\$(./markdown-runner --view ci -B deploy/nope cases -f '.*'cases/failing_run.md 2>&1); rc=\$?; [ \$rc -ne 0 ] && ! echo \"\$out\" | grep -q 'echo deploy'" || ((FAILED_TESTS++))
 
 run_test "--list does not warn about breakpoints" \
     "! ./markdown-runner --list -B nope cases 2>&1 | grep -q 'never reached'" || ((FAILED_TESTS++))

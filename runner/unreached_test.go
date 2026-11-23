@@ -76,6 +76,33 @@ func TestCheckBreakpoints(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Empty(t, w)
 	})
+	t.Run("chunk index out of range is an error", func(t *testing.T) {
+		_, err := check(one, config.Location{}, config.Location{Stage: "stage2", Chunk: "5"})
+		assert.ErrorContains(t, err, "out of range")
+	})
+	t.Run("file-qualified chunk missing in that file's stage", func(t *testing.T) {
+		a := path.Join(tmpDir, "a.md")
+		b := path.Join(tmpDir, "b.md")
+		assert.NoError(t, os.WriteFile(a, []byte("```bash {\"stage\":\"deploy\",\"id\":\"x\"}\necho a\n```\n"), 0o644))
+		assert.NoError(t, os.WriteFile(b, []byte("```bash {\"stage\":\"deploy\"}\necho b\n```\n"), 0o644))
+		_, err := check([]string{a, b}, config.Location{}, config.Location{File: "b", Stage: "deploy", Chunk: "x"})
+		assert.ErrorContains(t, err, "chunk with ID 'x' not found in stage 'deploy'")
+	})
+	t.Run("start-from in a later file skips an earlier file's stage", func(t *testing.T) {
+		a := path.Join(tmpDir, "a.md")
+		b := path.Join(tmpDir, "b.md")
+		assert.NoError(t, os.WriteFile(a, []byte("```bash {\"stage\":\"deploy\"}\necho a\n```\n"), 0o644))
+		assert.NoError(t, os.WriteFile(b, []byte("```bash {\"stage\":\"deploy\"}\necho b\n```\n"), 0o644))
+		w, err := check([]string{a, b}, config.Location{File: "b", Stage: "deploy"}, config.Location{File: "a", Stage: "deploy"})
+		assert.NoError(t, err)
+		assert.Len(t, w, 1)
+		assert.Contains(t, w[0], "before the --start-from stage")
+	})
+	t.Run("start-from chunk missing is left to the run", func(t *testing.T) {
+		w, err := check(one, config.Location{Stage: "stage2", Chunk: "nope"}, config.Location{Stage: "typo"})
+		assert.NoError(t, err)
+		assert.Empty(t, w)
+	})
 	t.Run("start-from is not consumed", func(t *testing.T) {
 		cfg := &config.Config{MarkdownDir: tmpDir, MinutesToTimeout: 1, View: "mock",
 			StartFromLocation: config.Location{Stage: "stage2"}, Breakpoints: []config.Location{{Stage: "stage2"}}}
