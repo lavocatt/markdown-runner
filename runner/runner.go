@@ -122,6 +122,9 @@ func CheckBreakpoints(cfg *config.Config, files []string) ([]string, error) {
 			visits = append(visits, visit{file, st.Name, skip, st})
 		}
 	}
+	// A --start-from still pending after every file was replayed never matched
+	// a stage: every stage is skipped, which is the real cause for the warnings.
+	startUnmatched := sim.StartFromLocation.Stage != ""
 	var warnings []string
 	for _, bp := range cfg.Breakpoints {
 		fileSeen, skipped, found := false, false, false
@@ -153,6 +156,8 @@ func CheckBreakpoints(cfg *config.Config, files []string) ([]string, error) {
 			continue
 		case !fileSeen:
 			why = fmt.Sprintf("no markdown file matching '%s' is run", bp.File)
+		case skipped && startUnmatched:
+			why = fmt.Sprintf("the --start-from stage '%s' was not found, so every stage is skipped", cfg.StartFromLocation.Stage)
 		case skipped:
 			why = fmt.Sprintf("stage '%s' comes before the --start-from stage and is skipped", bp.Stage)
 		default:

@@ -55,6 +55,11 @@ func TestCheckBreakpoints(t *testing.T) {
 		assert.Contains(t, w[0], "'stage1' is never reached")
 		assert.Contains(t, w[0], "before the --start-from stage")
 	})
+	t.Run("unknown start-from stage is named as the cause", func(t *testing.T) {
+		w, err := check(one, config.Location{Stage: "nostage"}, config.Location{Stage: "stage1"})
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"breakpoint 'stage1' is never reached: the --start-from stage 'nostage' was not found, so every stage is skipped"}, w)
+	})
 	t.Run("no such file", func(t *testing.T) {
 		w, err := check(one, config.Location{}, config.Location{File: "nope", Stage: "stage1"})
 		assert.NoError(t, err)
