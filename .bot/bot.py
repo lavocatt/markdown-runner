@@ -1231,8 +1231,13 @@ def hard_findings(rep: dict) -> list[str]:
     return hard
 
 
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
 def _norm(s) -> str:
-    return re.sub(r"\s+", " ", str(s or "")).strip().strip("'\"`")
+    """For the probe check: no colour codes (pterm's default view), whitespace collapsed. A model
+    copies the text it sees, not the escape codes (PR #3: three rounds lost to this)."""
+    return re.sub(r"\s+", " ", ANSI.sub("", str(s or ""))).strip().strip("'\"`")
 
 
 def enforce(out: dict, hard: list[str], outputs: list[str], code_changed: bool) -> dict:

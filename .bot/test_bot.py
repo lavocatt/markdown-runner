@@ -98,6 +98,9 @@ check("all verified, all ok -> ready", out["verdict"] == "ready")
 model["unhappy"].append({"case": "nil", "handled": False, "tested": False})
 check("unhandled path -> changes", bot.enforce(model, [], ["OK one two three"], True)["verdict"] == "changes")
 
+raw = "\x1b[30;46m\x1b[30;46m INFO \x1b[0m\x1b[0m \x1b[96m/tmp/p/md/demo.md:\x1b[0m\x1b[0m✅"
+m2 = {"verdict": "ready", "summary": "ok", "unhappy": [], "probes": [{"input": "x", "got": "INFO /tmp/p/md/demo.md:✅", "ok": True}]}
+check("probe output found through colour codes", bot.enforce(m2, [], [raw], code_changed=False)["probes"][0]["verified"])
 s, m = bot.parse_final("blah\nSUBJECT: warn on unreachable breakpoint\nSUMMARY: did it.\nmore")
 check("parse_final", s == "warn on unreachable breakpoint" and m.startswith("did it."))
 check("protected glob", bot.protected(".github/workflows/x.yml") and not bot.protected("runner/x.go"))
