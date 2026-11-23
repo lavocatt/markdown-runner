@@ -167,6 +167,8 @@ func CheckBreakpoints(cfg *config.Config, files []string) ([]string, error) {
 			why = fmt.Sprintf("chunk '%s' comes before the --start-from chunk '%s' and is skipped", bp.Chunk, chunkBefore)
 		case found:
 			continue
+		case !fileSeen && bp.File == "":
+			why = "no markdown file is run"
 		case !fileSeen:
 			why = fmt.Sprintf("no markdown file matching '%s' is run", bp.File)
 		case skipped && startUnmatched:

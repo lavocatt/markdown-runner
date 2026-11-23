@@ -70,6 +70,11 @@ func TestCheckBreakpoints(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, []string{"breakpoint 'nope@stage1' is never reached: no markdown file matching 'nope' is run"}, w)
 	})
+	t.Run("no file is run at all", func(t *testing.T) {
+		w, err := check([]string{}, config.Location{}, config.Location{Stage: "deploy"})
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"breakpoint 'deploy' is never reached: no markdown file is run"}, w)
+	})
 	t.Run("chunk only in the first file that has the stage is valid", func(t *testing.T) {
 		a := path.Join(tmpDir, "a.md")
 		b := path.Join(tmpDir, "b.md")
