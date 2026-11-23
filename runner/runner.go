@@ -137,12 +137,15 @@ func CheckBreakpoints(cfg *config.Config, files []string) ([]string, error) {
 				skipped = true
 				continue
 			}
+			// At run time a breakpoint is used up by the first stage that
+			// matches and isn't skipped: validate it against that one only.
 			found = true
 			if bp.Chunk != "" {
 				if _, err := findChunkByIdOrIndex(v.s, bp.Chunk); err != nil {
 					return nil, err
 				}
 			}
+			break
 		}
 		var why string
 		switch {

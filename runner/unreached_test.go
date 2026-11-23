@@ -60,6 +60,22 @@ func TestCheckBreakpoints(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, []string{"breakpoint 'nope@stage1' is never reached: no markdown file matching 'nope' is run"}, w)
 	})
+	t.Run("chunk only in the first file that has the stage is valid", func(t *testing.T) {
+		a := path.Join(tmpDir, "a.md")
+		b := path.Join(tmpDir, "b.md")
+		assert.NoError(t, os.WriteFile(a, []byte("```bash {\"stage\":\"deploy\",\"id\":\"x\"}\necho a\n```\n"), 0o644))
+		assert.NoError(t, os.WriteFile(b, []byte("```bash {\"stage\":\"deploy\"}\necho b\n```\n"), 0o644))
+		w, err := check([]string{a, b}, config.Location{}, config.Location{Stage: "deploy", Chunk: "x"})
+		assert.NoError(t, err)
+		assert.Empty(t, w)
+	})
+	t.Run("a file that fails to parse drops all warnings", func(t *testing.T) {
+		bad := path.Join(tmpDir, "bad.md")
+		assert.NoError(t, os.WriteFile(bad, []byte("```bash {\"stage\":}\necho x\n```\n"), 0o644))
+		w, err := check([]string{bad, mdFile}, config.Location{}, config.Location{Stage: "typo"})
+		assert.NoError(t, err)
+		assert.Empty(t, w)
+	})
 	t.Run("start-from is not consumed", func(t *testing.T) {
 		cfg := &config.Config{MarkdownDir: tmpDir, MinutesToTimeout: 1, View: "mock",
 			StartFromLocation: config.Location{Stage: "stage2"}, Breakpoints: []config.Location{{Stage: "stage2"}}}
