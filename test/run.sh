@@ -154,6 +154,9 @@ run_test "An unknown chunk in a stage that runs fails before anything runs" \
 run_test "--list does not warn about breakpoints" \
     "! ./markdown-runner --list -B nope cases 2>&1 | grep -q 'never reached'" || ((FAILED_TESTS++))
 
+run_test "A breakpoint on a chunk before the start chunk is reported" \
+    "./markdown-runner --view ci -s main/second -B main/first cases -f '.*'cases/start_from.md 2>&1 | grep -q 'comes before the --start-from chunk'" || ((FAILED_TESTS++))
+
 # --- Test Summary ---
 print_msg "33" "\n--- Test Summary ---"
 if [ "${FAILED_TESTS}" -eq 0 ]; then

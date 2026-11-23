@@ -108,6 +108,27 @@ func TestCheckBreakpoints(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Empty(t, w)
 	})
+	t.Run("chunk before the start-from chunk", func(t *testing.T) {
+		f := path.Join(tmpDir, "chunks.md")
+		assert.NoError(t, os.WriteFile(f, []byte("```bash {\"stage\":\"deploy\",\"id\":\"a\"}\necho a\n```\n```bash {\"stage\":\"deploy\",\"id\":\"b\"}\necho b\n```\n"), 0o644))
+		files := []string{f}
+		w, err := check(files, config.Location{Stage: "deploy", Chunk: "b"}, config.Location{Stage: "deploy", Chunk: "a"})
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"breakpoint 'deploy/a' is never reached: chunk 'a' comes before the --start-from chunk 'b' and is skipped"}, w)
+		w, err = check(files, config.Location{Stage: "deploy", Chunk: "1"}, config.Location{Stage: "deploy", Chunk: "0"})
+		assert.NoError(t, err)
+		assert.Len(t, w, 1)
+		assert.Contains(t, w[0], "comes before the --start-from chunk")
+		for _, ok := range []struct{ start, bp config.Location }{
+			{config.Location{Stage: "deploy", Chunk: "b"}, config.Location{Stage: "deploy", Chunk: "b"}},
+			{config.Location{Stage: "deploy", Chunk: "a"}, config.Location{Stage: "deploy", Chunk: "b"}},
+			{config.Location{Stage: "deploy", Chunk: "b"}, config.Location{Stage: "deploy"}},
+		} {
+			w, err = check(files, ok.start, ok.bp)
+			assert.NoError(t, err)
+			assert.Empty(t, w)
+		}
+	})
 	t.Run("start-from is not consumed", func(t *testing.T) {
 		cfg := &config.Config{MarkdownDir: tmpDir, MinutesToTimeout: 1, View: "mock",
 			StartFromLocation: config.Location{Stage: "stage2"}, Breakpoints: []config.Location{{Stage: "stage2"}}}

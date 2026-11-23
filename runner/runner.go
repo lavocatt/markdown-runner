@@ -128,6 +128,7 @@ func CheckBreakpoints(cfg *config.Config, files []string) ([]string, error) {
 	var warnings []string
 	for _, bp := range cfg.Breakpoints {
 		fileSeen, skipped, found := false, false, false
+		chunkBefore := ""
 		for _, v := range visits {
 			if !matchesFile(v.file, bp.File) {
 				continue
@@ -144,14 +145,25 @@ func CheckBreakpoints(cfg *config.Config, files []string) ([]string, error) {
 			// matches and isn't skipped: validate it against that one only.
 			found = true
 			if bp.Chunk != "" {
-				if _, err := findChunkByIdOrIndex(v.s, bp.Chunk); err != nil {
+				bpChunk, err := findChunkByIdOrIndex(v.s, bp.Chunk)
+				if err != nil {
 					return nil, err
+				}
+				// The chunks before the --start-from chunk are skipped before
+				// the breakpoint check, so the breakpoint can't fire.
+				if v.s.StartFromChunk != "" {
+					startChunk, err := findChunkByIdOrIndex(v.s, v.s.StartFromChunk)
+					if err == nil && chunkPosition(v.s, bpChunk) < chunkPosition(v.s, startChunk) {
+						chunkBefore = v.s.StartFromChunk
+					}
 				}
 			}
 			break
 		}
 		var why string
 		switch {
+		case found && chunkBefore != "":
+			why = fmt.Sprintf("chunk '%s' comes before the --start-from chunk '%s' and is skipped", bp.Chunk, chunkBefore)
 		case found:
 			continue
 		case !fileSeen:
@@ -166,6 +178,16 @@ func CheckBreakpoints(cfg *config.Config, files []string) ([]string, error) {
 		warnings = append(warnings, fmt.Sprintf("breakpoint '%s' is never reached: %s", bp, why))
 	}
 	return warnings, nil
+}
+
+// chunkPosition returns the index of a chunk in its stage.
+func chunkPosition(s *stage.Stage, c *chunk.ExecutableChunk) int {
+	for i, other := range s.Chunks {
+		if other == c {
+			return i
+		}
+	}
+	return -1
 }
 
 // matchesFile reports whether the markdown file being executed matches the
