@@ -127,8 +127,17 @@ class Identity:
         if not self.is_app:
             return os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
         if time.time() > self._exp:
+            import urllib.error
+
             auth = "Bearer " + self._jwt()
-            inst = _http(f"https://api.github.com/repos/{REPO}/installation", auth=auth)
+            try:
+                inst = _http(f"https://api.github.com/repos/{REPO}/installation", auth=auth)
+            except urllib.error.HTTPError as e:
+                why = {
+                    401: "its private key doesn't match its App ID",
+                    404: f"it is not installed on {REPO} (App settings > Install App)",
+                }.get(e.code, f"HTTP {e.code}")
+                raise SystemExit(f"FATAL: the {self.role} GitHub App (ID {self.app_id}): {why}") from None
             t = _http(
                 f"https://api.github.com/app/installations/{inst['id']}/access_tokens",
                 "POST",
