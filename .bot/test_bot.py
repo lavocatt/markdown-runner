@@ -111,5 +111,9 @@ check("probe copied with bare colour codes is verified",
 check("[Yes/no] is not a colour code", "[Yes/no/continue/quit]" in bot._norm("[95m[Yes/no/continue/quit][0m"))
 s, m = bot.parse_final("blah\nSUBJECT: warn on unreachable breakpoint\nSUMMARY: did it.\nmore")
 check("parse_final", s == "warn on unreachable breakpoint" and m.startswith("did it."))
+_ms = [{"kind": "review"}] * 3 + [{"kind": "fix", "failing": ["x"]}] * 2 + [{"kind": "handover"}, {"kind": "address", "source": "human"}]
+check("a human review starts a new bot cycle", bot.budgets(_ms)["review_rounds"] == 0 and bot.budgets(_ms)["fix_rounds"] == 0
+      and bot.budgets(_ms)["human_rounds"] == 1)
+check("reviews still count within a cycle", bot.budgets(_ms + [{"kind": "review"}] * 2)["review_rounds"] == 2)
 check("protected glob", bot.protected(".github/workflows/x.yml") and not bot.protected("runner/x.go"))
 sys.exit(1 if FAILED else 0)

@@ -365,13 +365,20 @@ def spent_since_stuck(marks: list[dict]) -> float:
     return add_stats(*[m.get("stats") or {} for m in since_stuck(marks)])["usd"]
 
 
+def since_handover(marks: list[dict]) -> list[dict]:
+    """The markers after the last handover: a human's review starts a new bot cycle."""
+    last = max((i for i, m in enumerate(marks) if m["kind"] == "handover"), default=-1)
+    return marks[last + 1 :]
+
+
 def budgets(marks: list[dict]) -> dict:
     ms = since_stuck(marks)
+    cycle = since_handover(ms)  # bot reviews and CI fixes: per cycle, not per PR
     return {
-        "review_rounds": sum(1 for m in ms if m["kind"] == "review"),
-        "fix_rounds": sum(1 for m in ms if m["kind"] == "fix"),
+        "review_rounds": sum(1 for m in cycle if m["kind"] == "review"),
+        "fix_rounds": sum(1 for m in cycle if m["kind"] == "fix"),
         "human_rounds": sum(1 for m in ms if m["kind"] == "address" and m.get("source") == "human"),
-        "fix_history": [m.get("failing", []) for m in ms if m["kind"] == "fix"],
+        "fix_history": [m.get("failing", []) for m in cycle if m["kind"] == "fix"],
         "usd": spent_since_stuck(marks),
     }
 
