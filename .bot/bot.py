@@ -876,6 +876,8 @@ class Actions:
         print(f"[bot] action {json.dumps(a, ensure_ascii=False)}", flush=True)
         if self.dry or a["kind"] == "idle":
             return
+        if a["kind"] in SPENDING and f and not set(f.get("labels") or ()) & {L_DOING, L_READY, L_STUCK}:
+            add_label(a["pr"], L_DOING)  # going on after a human removed `bot:stuck`
         getattr(self, "do_" + a["kind"])(a, f or {})
 
     # ---------------------------------------------------------------- coder rounds
@@ -1138,6 +1140,7 @@ class Actions:
 
     def _stuck(self, number, reason, stats=None):
         add_label(number, L_STUCK)
+        remove_label(number, L_DOING)  # one state at a time; it comes back when the bot goes on
         comment(
             number,
             f"🤖 **Stopping here, a human looks**: {reason}\n\nRemove `{L_STUCK}` to let me go on."
