@@ -102,85 +102,110 @@ func CheckBreakpoints(cfg *config.Config, files []string) ([]string, error) {
 	if len(cfg.Breakpoints) == 0 {
 		return nil, nil
 	}
-	type visit struct {
-		file, stage string
-		skipped     bool
-		s           *stage.Stage
+	visits, startUnmatched, err := replayStages(cfg, files)
+	if err != nil {
+		return nil, err
 	}
-	var visits []visit
+	var warnings []string
+	for _, bp := range cfg.Breakpoints {
+		why, err := unreachableReason(cfg, bp, visits, startUnmatched)
+		if err != nil {
+			return nil, err
+		}
+		if why != "" {
+			warnings = append(warnings, fmt.Sprintf("breakpoint '%s' is never reached: %s", bp, why))
+		}
+	}
+	return warnings, nil
+}
+
+// stageVisit is a stage of a file as the run would meet it.
+type stageVisit struct {
+	file, stage string
+	skipped     bool
+	s           *stage.Stage
+}
+
+// replayStages parses the files and replays the --start-from logic on a copy of
+// the configuration. It also tells whether the --start-from location was never
+// matched by a stage, in which case every stage is skipped.
+func replayStages(cfg *config.Config, files []string) ([]stageVisit, bool, error) {
+	var visits []stageVisit
 	sim := *cfg // simulate --start-from without consuming the real one
 	for _, file := range files {
 		ctx := &runnercontext.Context{Cfg: &sim, RView: view.NewView("mock")}
 		stages, err := parser.ExtractStages(ctx, path.Base(file), path.Dir(file))
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		for _, st := range stages {
 			skip, err := applyStartFrom(&sim, file, st)
 			if err != nil {
-				return nil, nil // a bad --start-from is reported by the run
+				return nil, false, err
 			}
-			visits = append(visits, visit{file, st.Name, skip, st})
+			visits = append(visits, stageVisit{file, st.Name, skip, st})
 		}
 	}
-	// A --start-from still pending after every file was replayed never matched
-	// a stage: every stage is skipped, which is the real cause for the warnings.
-	startUnmatched := sim.StartFromLocation.Stage != ""
-	var warnings []string
-	for _, bp := range cfg.Breakpoints {
-		fileSeen, skipped, found := false, false, false
-		chunkBefore := ""
-		for _, v := range visits {
-			if !matchesFile(v.file, bp.File) {
-				continue
-			}
-			fileSeen = true
-			if v.stage != bp.Stage {
-				continue
-			}
-			if v.skipped {
-				skipped = true
-				continue
-			}
-			// At run time a breakpoint is used up by the first stage that
-			// matches and isn't skipped: validate it against that one only.
-			found = true
-			if bp.Chunk != "" {
-				bpChunk, err := findChunkByIdOrIndex(v.s, bp.Chunk)
-				if err != nil {
-					return nil, err
-				}
-				// The chunks before the --start-from chunk are skipped before
-				// the breakpoint check, so the breakpoint can't fire.
-				if v.s.StartFromChunk != "" {
-					startChunk, err := findChunkByIdOrIndex(v.s, v.s.StartFromChunk)
-					if err == nil && chunkPosition(v.s, bpChunk) < chunkPosition(v.s, startChunk) {
-						chunkBefore = v.s.StartFromChunk
-					}
-				}
-			}
-			break
-		}
-		var why string
-		switch {
-		case found && chunkBefore != "":
-			why = fmt.Sprintf("chunk '%s' comes before the --start-from chunk '%s' and is skipped", bp.Chunk, chunkBefore)
-		case found:
+	return visits, sim.StartFromLocation.Stage != "", nil
+}
+
+// findBreakpointStage finds the stage a breakpoint will be consumed by at run
+// time: the first matching stage that isn't skipped. It also tells whether a
+// file matching the breakpoint was seen and whether a matching stage was skipped.
+func findBreakpointStage(bp config.Location, visits []stageVisit) (found *stage.Stage, fileSeen, skipped bool) {
+	for _, v := range visits {
+		if !matchesFile(v.file, bp.File) {
 			continue
-		case !fileSeen && bp.File == "":
-			why = "no markdown file is run"
-		case !fileSeen:
-			why = fmt.Sprintf("no markdown file matching '%s' is run", bp.File)
-		case skipped && startUnmatched:
-			why = fmt.Sprintf("the --start-from location '%s' was not found, so every stage is skipped", cfg.StartFromLocation)
-		case skipped:
-			why = fmt.Sprintf("stage '%s' comes before the --start-from stage and is skipped", bp.Stage)
-		default:
-			why = fmt.Sprintf("unknown stage '%s'", bp.Stage)
 		}
-		warnings = append(warnings, fmt.Sprintf("breakpoint '%s' is never reached: %s", bp, why))
+		fileSeen = true
+		if v.stage != bp.Stage {
+			continue
+		}
+		if v.skipped {
+			skipped = true
+			continue
+		}
+		return v.s, fileSeen, skipped
 	}
-	return warnings, nil
+	return nil, fileSeen, skipped
+}
+
+// unreachableReason returns why a breakpoint can never be reached, or "" when
+// it can. A chunk that doesn't exist in the stage that will run is an error.
+func unreachableReason(cfg *config.Config, bp config.Location, visits []stageVisit, startUnmatched bool) (string, error) {
+	st, fileSeen, skipped := findBreakpointStage(bp, visits)
+	if st != nil {
+		if bp.Chunk == "" {
+			return "", nil
+		}
+		bpChunk, err := findChunkByIdOrIndex(st, bp.Chunk)
+		if err != nil {
+			return "", err
+		}
+		// The chunks before the --start-from chunk are skipped before the
+		// breakpoint check, so the breakpoint can't fire.
+		if st.StartFromChunk != "" {
+			startChunk, err := findChunkByIdOrIndex(st, st.StartFromChunk)
+			if err != nil {
+				return "", err
+			}
+			if chunkPosition(st, bpChunk) < chunkPosition(st, startChunk) {
+				return fmt.Sprintf("chunk '%s' comes before the --start-from chunk '%s' and is skipped", bp.Chunk, st.StartFromChunk), nil
+			}
+		}
+		return "", nil
+	}
+	switch {
+	case !fileSeen && bp.File == "":
+		return "no markdown file is run", nil
+	case !fileSeen:
+		return fmt.Sprintf("no markdown file matching '%s' is run", bp.File), nil
+	case skipped && startUnmatched:
+		return fmt.Sprintf("the --start-from location '%s' was not found, so every stage is skipped", cfg.StartFromLocation), nil
+	case skipped:
+		return fmt.Sprintf("stage '%s' comes before the --start-from stage and is skipped", bp.Stage), nil
+	}
+	return fmt.Sprintf("unknown stage '%s'", bp.Stage), nil
 }
 
 // chunkPosition returns the index of a chunk in its stage.

@@ -113,9 +113,9 @@ func TestCheckBreakpoints(t *testing.T) {
 		assert.Len(t, w, 1)
 		assert.Contains(t, w[0], "before the --start-from stage")
 	})
-	t.Run("start-from chunk missing is left to the run", func(t *testing.T) {
+	t.Run("start-from chunk missing is an error, no warning", func(t *testing.T) {
 		w, err := check(one, config.Location{Stage: "stage2", Chunk: "nope"}, config.Location{Stage: "typo"})
-		assert.NoError(t, err)
+		assert.Error(t, err)
 		assert.Empty(t, w)
 	})
 	t.Run("chunk before the start-from chunk", func(t *testing.T) {
