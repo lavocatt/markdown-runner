@@ -138,6 +138,18 @@ run_test "A filtered-out file cannot match a breakpoint" \
 run_test "A breakpoint can target a later selected file" \
     "./markdown-runner --view ci -r -B other@test cases/recursive" || ((FAILED_TESTS++))
 
+check_invalid_start_and_breakpoints() {
+    local diagnostics status=0
+    diagnostics=$(./markdown-runner --view ci -s main/missing -B mian -B absent@main cases/start_from.md 2>&1 >/dev/null) || status=$?
+    [[ "$status" -eq 1 &&
+        "$diagnostics" == *"chunk with ID 'missing' not found in stage 'main'"* &&
+        "$diagnostics" == *'"mian": unknown stage'* &&
+        "$diagnostics" == *'"absent@main": no such file'* ]]
+}
+
+run_test "An invalid start chunk and unreachable breakpoints are reported on stderr" \
+    "check_invalid_start_and_breakpoints" || ((FAILED_TESTS++))
+
 # --- Test Summary ---
 print_msg "33" "\n--- Test Summary ---"
 if [ "${FAILED_TESTS}" -eq 0 ]; then

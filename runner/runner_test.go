@@ -412,3 +412,44 @@ func TestRunMDRejectsUnreachableBreakpoints(t *testing.T) {
 	assert.Error(t, RunMD(cfg, file))
 	assert.NoFileExists(t, path.Join(dir, "executed"))
 }
+
+func TestRunMDReportsBreakpointsWithInvalidStartChunk(t *testing.T) {
+	file := path.Join(t.TempDir(), "pipeline.md")
+	if err := os.WriteFile(file, []byte("```bash {\"stage\":\"deploy\"}\ntrue\n```\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		View:              "mock",
+		StartFromLocation: config.Location{Stage: "deploy", Chunk: "nope"},
+		Breakpoints: []config.Location{
+			{Stage: "deplyo"},
+			{File: "missing", Stage: "deploy"},
+		},
+	}
+	err := RunMD(cfg, file)
+	assert.ErrorContains(t, err, "chunk with ID 'nope' not found in stage 'deploy'")
+	assert.ErrorContains(t, err, `"deplyo": unknown stage`)
+	assert.ErrorContains(t, err, `"missing@deploy": no such file`)
+}
+
+func TestRunFilesReadsUpdatedMarkdownWithBreakpoint(t *testing.T) {
+	dir := t.TempDir()
+	first, second := path.Join(dir, "a.md"), path.Join(dir, "b.md")
+	oldMarker, newMarker := path.Join(dir, "OLD"), path.Join(dir, "NEW")
+	for file, contents := range map[string]string{
+		first:  "```bash {\"stage\":\"setup\"}\nsed -i 's/OLD/NEW/' \"" + second + "\"\n```\n",
+		second: "```bash {\"stage\":\"deploy\"}\ntouch \"" + oldMarker + "\"\n```\n",
+	} {
+		if err := os.WriteFile(file, []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := &config.Config{
+		MarkdownDir: dir, MinutesToTimeout: 1, View: "mock",
+		Breakpoints: []config.Location{{File: "b", Stage: "deploy", Chunk: "0"}},
+	}
+	assert.NoError(t, RunFiles(cfg, []string{first, second}))
+	assert.Empty(t, cfg.Breakpoints)
+	assert.FileExists(t, newMarker)
+	assert.NoFileExists(t, oldMarker)
+}

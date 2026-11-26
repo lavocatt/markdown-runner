@@ -54,6 +54,21 @@ func RunFiles(cfg *config.Config, files []string) error {
 	for i, file := range files {
 		ui := fileViews[i]
 		ui.StartFile(file)
+		if i > 0 {
+			// Earlier commands may have rewritten this file since preflight.
+			stages, err := extractStages(cfg, ui, file)
+			if err != nil {
+				ui.EndFile(file, err)
+				return err
+			}
+			fileStages[i] = stages
+			if len(cfg.Breakpoints) > 0 {
+				if err := validateBreakpoints(cfg, files[i:], fileStages[i:]); err != nil {
+					ui.EndFile(file, err)
+					return err
+				}
+			}
+		}
 		if err := runStages(cfg, ui, file, fileStages[i]); err != nil {
 			return err
 		}
@@ -140,6 +155,7 @@ func validateBreakpoints(cfg *config.Config, files []string, fileStages [][]*sta
 	}
 
 	start := config.Config{StartFromLocation: cfg.StartFromLocation}
+	var startErr error
 	for i, file := range files {
 		for j, bp := range cfg.Breakpoints {
 			if matchesFile(file, bp.File) && !statuses[j].matchedStage {
@@ -150,7 +166,10 @@ func validateBreakpoints(cfg *config.Config, files []string, fileStages [][]*sta
 			stageCopy := *currentStage
 			skip, err := applyStartFrom(&start, file, &stageCopy)
 			if err != nil {
-				return err
+				startErr = err
+				// The start chunk is invalid, but the stage and chunk names
+				// in the pending breakpoints can still be checked.
+				start.StartFromLocation = config.Location{}
 			}
 			for j, bp := range cfg.Breakpoints {
 				status := &statuses[j]
@@ -192,9 +211,9 @@ func validateBreakpoints(cfg *config.Config, files []string, fileStages [][]*sta
 		diagnostics = append(diagnostics, fmt.Errorf("unreachable breakpoint %q: %s", location, status.reason))
 	}
 	if len(diagnostics) == 0 {
-		return nil
+		return startErr
 	}
-	return &BreakpointError{errors.Join(diagnostics...)}
+	return &BreakpointError{errors.Join(append([]error{startErr}, diagnostics...)...)}
 }
 
 // matchesFile reports whether the markdown file being executed matches the
