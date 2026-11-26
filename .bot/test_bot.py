@@ -324,6 +324,25 @@ try:
 except bot.RateLimited:
     _raised = True
 check("a 429 stops the run and puts a new issue back in the queue", _raised and _removed == [(9, bot.L_DOING)])
+_removed.clear()
+_acts.do_new = lambda a, f: 1 / 0
+try:
+    _acts.run({"kind": "new", "issue": 8, "title": "t"}, None)
+except ZeroDivisionError:
+    pass
+check("a crash starting an issue puts it back in the queue too", _removed == [(8, bot.L_DOING)])
+_h2 = bot.agent_home()
+bot.codex_config(_h2)
+os.chmod(os.path.join(_h2, ".codex"), 0o555)  # what the agent user's files look like to the harness
+try:
+    bot.codex_config(_h2)
+    _again = True
+except OSError:
+    _again = False
+os.chmod(os.path.join(_h2, ".codex"), 0o755)
+check("codex: a resume doesn't touch the agent's files again", _again)
+check("codex: default models are in Codex's catalog, and the reviewer differs",
+      _saved_agent != "codex" or (bot.MODEL, bot.REVIEW_MODEL) == ("gpt-6.2-sol", "gpt-6.2-astra"))
 bot.codex = lambda *a, **kw: {"subtype": "success", "is_error": False, "result": "fine"}
 check("a run that went fine is returned as is", bot.agent("/tmp", "p", "s", "l", [], "m")["result"] == "fine")
 bot.remove_label, bot.codex = _orig

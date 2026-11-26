@@ -75,9 +75,11 @@ AGENT = os.environ.get("BOT_AGENT", "claude")
 if AGENT not in ("claude", "codex"):
     raise SystemExit(f"FATAL: BOT_AGENT={AGENT!r}: claude or codex")
 AGENT_NAME = {"claude": "Claude Code", "codex": "Codex"}[AGENT]
-# a different model reviews: same vendor, but not the same blind spots as the coder's
-MODEL = os.environ.get("BOT_MODEL") or {"claude": "sonnet", "codex": "gpt-5.3-codex"}[AGENT]
-REVIEW_MODEL = os.environ.get("BOT_REVIEW_MODEL") or {"claude": "opus", "codex": "gpt-6.2-sol"}[AGENT]
+# a different, stronger model reviews: same vendor, but not the same blind spots as the coder's.
+# Codex: models of its bundled catalog (`codex debug models --bundled`); others run on fallback
+# metadata, which degrades them (gpt-5.3-codex gave up after reading the code, on a real run).
+MODEL = os.environ.get("BOT_MODEL") or {"claude": "sonnet", "codex": "gpt-6.2-sol"}[AGENT]
+REVIEW_MODEL = os.environ.get("BOT_REVIEW_MODEL") or {"claude": "opus", "codex": "gpt-6.2-astra"}[AGENT]
 ROUND_USD = os.environ.get("BOT_MAX_USD_PER_ROUND", "15")
 # per PR: past it, no more spending action, `bot:stuck`. Counted since the last « stuck » (a human
 # removing the label grants the PR the same amount again). A round started under the cap may end
@@ -831,10 +833,14 @@ def parse_codex(lines, model: str, schema: bool, prior: dict | None = None) -> d
 
 
 def codex_config(home: str) -> str:
-    """CODEX_HOME/config.toml: OpenAI (or a gateway: BOT_OPENAI_BASE_URL), no project docs, no web."""
+    """CODEX_HOME/config.toml: OpenAI (or a gateway: BOT_OPENAI_BASE_URL), no project docs, no web.
+    Written once per home: on a resume, the files under it belong to the agent user."""
     base = os.environ.get("BOT_OPENAI_BASE_URL") or "https://api.openai.com/v1"
     d = os.path.join(home, ".codex")
-    os.makedirs(d, exist_ok=True)
+    if os.path.exists(os.path.join(d, "config.toml")):
+        return d
+    os.makedirs(d, mode=0o777)
+    os.chmod(d, 0o777)
     with open(os.path.join(d, "config.toml"), "w", encoding="utf-8") as f:
         f.write(
             'model_provider = "bot"\nservice_tier = "default"\napproval_policy = "never"\n'
@@ -846,9 +852,7 @@ def codex_config(home: str) -> str:
             f"base_url = {json.dumps(base)}\n"
             'env_key = "OPENAI_API_KEY"\nwire_api = "responses"\n'
         )
-    for root, dirs, files in os.walk(home):
-        for x in dirs:
-            os.chmod(os.path.join(root, x), 0o777)
+    os.chmod(os.path.join(d, "config.toml"), 0o644)
     return d
 
 
@@ -1219,8 +1223,10 @@ class Actions:
             add_label(a["pr"], L_DOING)  # going on after a human removed `bot:stuck`
         try:
             getattr(self, "do_" + a["kind"])(a, f or {})
-        except RateLimited:
-            if a["kind"] == "new":  # back in the queue (a PR keeps its labels: it just waits)
+        except Exception:
+            # a refused provider (429) or a crash: the issue goes back in the queue, not left `doing`
+            # with no PR (the queue skips those). A PR keeps its labels: the next run picks it up.
+            if a["kind"] == "new":
                 remove_label(a["issue"], L_DOING)
             raise
 
