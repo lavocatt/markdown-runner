@@ -129,6 +129,70 @@ run_test "Several breakpoints can be set" \
 run_test "Every breakpoint is validated, not only the last one" \
     "! ./markdown-runner --view ci -B test/1 -B test/0 cases -f '.*'cases/happy.md" || ((FAILED_TESTS++))
 
+run_test "Unreachable breakpoint reports its location and reason" \
+    "./markdown-runner --view ci -s main -B init cases/start_from.md 2>&1 | grep -F 'unreachable breakpoint \"init\": before the start stage'" || ((FAILED_TESTS++))
+
+run_test "A filtered-out file cannot match a breakpoint" \
+    "./markdown-runner --quiet -B start_from@main cases -f 'happy[.]md$' 2>&1 >/dev/null | grep -F 'unreachable breakpoint \"start_from@main\": no such file'" || ((FAILED_TESTS++))
+
+run_test "A breakpoint can target a later selected file" \
+    "./markdown-runner --view ci -r -B other@test cases/recursive" || ((FAILED_TESTS++))
+
+check_invalid_start_and_breakpoints() {
+    local diagnostics status=0
+    diagnostics=$(./markdown-runner --view ci -s main/missing -B mian -B absent@main cases/start_from.md 2>&1 >/dev/null) || status=$?
+    [[ "$status" -eq 1 &&
+        "$diagnostics" == *"chunk with ID 'missing' not found in stage 'main'"* &&
+        "$diagnostics" == *'"mian": unknown stage'* &&
+        "$diagnostics" == *'"absent@main": no such file'* ]]
+}
+
+run_test "An invalid start chunk and unreachable breakpoints are reported on stderr" \
+    "check_invalid_start_and_breakpoints" || ((FAILED_TESTS++))
+
+prepare_breakpoint_files() {
+    rm -rf test_ws &&
+        mkdir -p test_ws &&
+        cp cases/dynamic_breakpoint/a.md test_ws/a.md &&
+        cp cases/dynamic_breakpoint/b.md.in test_ws/b.md
+}
+
+check_dynamic_breakpoint() {
+    local output
+    prepare_breakpoint_files &&
+        output=$(./markdown-runner --view ci -B b@deploy test_ws 2>&1) &&
+        [[ "$output" == *'warning: unreachable breakpoint "b@deploy": unknown stage'*"test_ws/a.md:"* &&
+           -f test_ws/executed ]]
+}
+
+run_test "An earlier file can create a breakpoint target after a pre-run warning" \
+    "check_dynamic_breakpoint" || ((FAILED_TESTS++))
+
+check_breakpoints_across_files() {
+    local diagnostics status=0
+    prepare_breakpoint_files || return 1
+    diagnostics=$(./markdown-runner --view ci -B a@typo -B b@oops test_ws 2>&1 >/dev/null) || status=$?
+    [[ "$status" -eq 1 &&
+        "$diagnostics" == *'"a@typo": unknown stage'* &&
+        "$diagnostics" == *'"b@oops": unknown stage'* &&
+        ! -e test_ws/started ]]
+}
+
+run_test "Unreachable breakpoints in separate files are reported together" \
+    "check_breakpoints_across_files" || ((FAILED_TESTS++))
+
+check_persistent_breakpoint_typo() {
+    local output status=0
+    prepare_breakpoint_files || return 1
+    output=$(./markdown-runner --view ci -B b@typo test_ws 2>&1) || status=$?
+    [[ "$status" -eq 1 &&
+        "$output" == *'warning: unreachable breakpoint "b@typo": unknown stage'*"test_ws/a.md:"*'unreachable breakpoint "b@typo": unknown stage'* &&
+        -f test_ws/started && ! -e test_ws/executed ]]
+}
+
+run_test "A later-file typo is warned about before commands and rejected before its file runs" \
+    "check_persistent_breakpoint_typo" || ((FAILED_TESTS++))
+
 # --- Test Summary ---
 print_msg "33" "\n--- Test Summary ---"
 if [ "${FAILED_TESTS}" -eq 0 ]; then

@@ -222,3 +222,18 @@ func (s *Stage) matchesChunk(currentChunk *chunk.ExecutableChunk, identifier str
 	}
 	return false
 }
+
+// SkipsChunk reports whether starting at start skips all matches for target.
+func (s *Stage) SkipsChunk(target, start string) bool {
+	if start == "" {
+		return false
+	}
+	started := false
+	for _, chunk := range s.Chunks {
+		started = started || s.matchesChunk(chunk, start)
+		if started && s.matchesChunk(chunk, target) {
+			return false
+		}
+	}
+	return true
+}

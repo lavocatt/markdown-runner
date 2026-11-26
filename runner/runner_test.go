@@ -371,3 +371,135 @@ echo "two"
 		assert.Error(t, err)
 	})
 }
+
+func TestRunMDRejectsUnreachableBreakpoints(t *testing.T) {
+	dir := t.TempDir()
+	file := path.Join(dir, "pipeline.md")
+	contents := "```bash {\"stage\":\"setup\"}\ntouch \"" + path.Join(dir, "executed") + "\"\n```\n" +
+		"```bash {\"stage\":\"deploy\",\"id\":\"first\"}\ntrue\n```\n" +
+		"```bash {\"stage\":\"deploy\",\"id\":\"second\"}\ntrue\n```\n"
+	if err := os.WriteFile(file, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		View:              "mock",
+		MinutesToTimeout:  1,
+		StartFromLocation: config.Location{File: "pipeline", Stage: "deploy", Chunk: "second"},
+		Breakpoints: []config.Location{
+			{Stage: "deplyo"},
+			{Stage: "deploy", Chunk: "nope"},
+			{Stage: "setup"},
+			{File: "missing", Stage: "deploy"},
+			{Stage: "deploy", Chunk: "first"},
+			{File: "pipeline", Stage: "deploy", Chunk: "second"},
+		},
+	}
+	err := RunMD(cfg, file)
+	for _, diagnostic := range []string{
+		`"deplyo": unknown stage`,
+		`"deploy/nope": unknown chunk`,
+		`"setup": before the start stage`,
+		`"missing@deploy": no such file`,
+		`"deploy/first": before the start chunk`,
+	} {
+		assert.ErrorContains(t, err, diagnostic)
+	}
+	if assert.Error(t, err) {
+		assert.NotContains(t, err.Error(), "pipeline@deploy/second")
+	}
+
+	cfg.StartFromLocation = config.Location{}
+	assert.Error(t, RunMD(cfg, file))
+	assert.NoFileExists(t, path.Join(dir, "executed"))
+}
+
+func TestRunMDReportsBreakpointsWithInvalidStartChunk(t *testing.T) {
+	file := path.Join(t.TempDir(), "pipeline.md")
+	if err := os.WriteFile(file, []byte("```bash {\"stage\":\"deploy\"}\ntrue\n```\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		View:              "mock",
+		StartFromLocation: config.Location{Stage: "deploy", Chunk: "nope"},
+		Breakpoints: []config.Location{
+			{Stage: "deplyo"},
+			{File: "missing", Stage: "deploy"},
+		},
+	}
+	err := RunMD(cfg, file)
+	assert.ErrorContains(t, err, "chunk with ID 'nope' not found in stage 'deploy'")
+	assert.ErrorContains(t, err, `"deplyo": unknown stage`)
+	assert.ErrorContains(t, err, `"missing@deploy": no such file`)
+}
+
+func TestRunFilesReadsUpdatedMarkdownWithBreakpoint(t *testing.T) {
+	dir := t.TempDir()
+	first, second := path.Join(dir, "a.md"), path.Join(dir, "b.md")
+	oldMarker, newMarker := path.Join(dir, "OLD"), path.Join(dir, "NEW")
+	for file, contents := range map[string]string{
+		first:  "```bash {\"stage\":\"setup\"}\nsed -i 's/OLD/NEW/' \"" + second + "\"\n```\n",
+		second: "```bash {\"stage\":\"deploy\"}\ntouch \"" + oldMarker + "\"\n```\n",
+	} {
+		if err := os.WriteFile(file, []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := &config.Config{
+		MarkdownDir: dir, MinutesToTimeout: 1, View: "mock",
+		Breakpoints: []config.Location{{File: "b", Stage: "deploy", Chunk: "0"}},
+	}
+	assert.NoError(t, RunFiles(cfg, []string{first, second}))
+	assert.Empty(t, cfg.Breakpoints)
+	assert.FileExists(t, newMarker)
+	assert.NoFileExists(t, oldMarker)
+}
+
+func TestRunFilesResolvesBreakpointCreatedByEarlierFile(t *testing.T) {
+	for _, tc := range []struct {
+		name, stage, id, replacement string
+	}{
+		{name: "stage", stage: "draft", id: "target", replacement: "deploy"},
+		{name: "chunk", stage: "deploy", id: "draft", replacement: "target"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			first, second := path.Join(dir, "a.md"), path.Join(dir, "b.md")
+			marker := path.Join(dir, "executed")
+			for file, contents := range map[string]string{
+				first:  "```bash {\"stage\":\"setup\"}\nsed -i 's/draft/" + tc.replacement + "/' \"" + second + "\"\n```\n",
+				second: "```bash {\"stage\":\"" + tc.stage + "\",\"id\":\"" + tc.id + "\"}\ntouch \"" + marker + "\"\n```\n",
+			} {
+				if err := os.WriteFile(file, []byte(contents), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg := &config.Config{
+				MarkdownDir: dir, MinutesToTimeout: 1, View: "mock",
+				Breakpoints: []config.Location{{File: "b", Stage: "deploy", Chunk: "target"}},
+			}
+			assert.NoError(t, RunFiles(cfg, []string{first, second}))
+			assert.Empty(t, cfg.Breakpoints)
+			assert.FileExists(t, marker)
+		})
+	}
+}
+
+func TestRunFilesReportsUnreachableBreakpointsAcrossFiles(t *testing.T) {
+	dir := t.TempDir()
+	first, second := path.Join(dir, "a.md"), path.Join(dir, "b.md")
+	marker := path.Join(dir, "started")
+	contents := "```bash {\"stage\":\"setup\"}\ntouch \"" + marker + "\"\n```\n"
+	for _, file := range []string{first, second} {
+		if err := os.WriteFile(file, []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := &config.Config{
+		MarkdownDir: dir, MinutesToTimeout: 1, View: "mock",
+		Breakpoints: []config.Location{{File: "a", Stage: "typo"}, {File: "b", Stage: "oops"}},
+	}
+	err := RunFiles(cfg, []string{first, second})
+	assert.ErrorContains(t, err, `"a@typo": unknown stage`)
+	assert.ErrorContains(t, err, `"b@oops": unknown stage`)
+	assert.NoFileExists(t, marker)
+}

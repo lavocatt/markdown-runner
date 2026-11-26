@@ -551,6 +551,13 @@ markdown-runner --break-at myfile@stage2 mydirectory/
 markdown-runner -B stage2/0 -B stage4/myChunkID myfile.md
 ```
 
+Before running commands, the runner checks CLI breakpoints against the current
+contents of the selected Markdown files and the `--start-from` location.
+Confirmed unreachable breakpoints are errors on stderr. Unreachable targets
+in later files are reported as warnings on stderr because earlier commands can
+change those files. The runner reads each later file again before executing
+it and exits with an error if a breakpoint is confirmed unreachable.
+
 When debugging is enabled, the runner will prompt you for each chunk
 (`[Yes/no/continue/quit]`, press the first letter of an answer or enter for
 `yes`), much like stepping through a program with gdb:
@@ -622,8 +629,8 @@ continues normally.
 
 > [!NOTE]
 > Skipped chunks are not executed, so a chunk that `requires` one of them will
-> be skipped as well. Likewise, a `--break-at` breakpoint on a skipped chunk
-> never fires.
+> be skipped as well. A CLI breakpoint before the start location is rejected
+> once the runner can determine it is unreachable.
 
 ##### `"id":"someID"`
 
