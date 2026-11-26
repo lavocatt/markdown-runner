@@ -371,3 +371,44 @@ echo "two"
 		assert.Error(t, err)
 	})
 }
+
+func TestRunMDRejectsUnreachableBreakpoints(t *testing.T) {
+	dir := t.TempDir()
+	file := path.Join(dir, "pipeline.md")
+	contents := "```bash {\"stage\":\"setup\"}\ntouch \"" + path.Join(dir, "executed") + "\"\n```\n" +
+		"```bash {\"stage\":\"deploy\",\"id\":\"first\"}\ntrue\n```\n" +
+		"```bash {\"stage\":\"deploy\",\"id\":\"second\"}\ntrue\n```\n"
+	if err := os.WriteFile(file, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		View:              "mock",
+		MinutesToTimeout:  1,
+		StartFromLocation: config.Location{File: "pipeline", Stage: "deploy", Chunk: "second"},
+		Breakpoints: []config.Location{
+			{Stage: "deplyo"},
+			{Stage: "deploy", Chunk: "nope"},
+			{Stage: "setup"},
+			{File: "missing", Stage: "deploy"},
+			{Stage: "deploy", Chunk: "first"},
+			{File: "pipeline", Stage: "deploy", Chunk: "second"},
+		},
+	}
+	err := RunMD(cfg, file)
+	for _, diagnostic := range []string{
+		`"deplyo": unknown stage`,
+		`"deploy/nope": unknown chunk`,
+		`"setup": before the start stage`,
+		`"missing@deploy": no such file`,
+		`"deploy/first": before the start chunk`,
+	} {
+		assert.ErrorContains(t, err, diagnostic)
+	}
+	if assert.Error(t, err) {
+		assert.NotContains(t, err.Error(), "pipeline@deploy/second")
+	}
+
+	cfg.StartFromLocation = config.Location{}
+	assert.Error(t, RunMD(cfg, file))
+	assert.NoFileExists(t, path.Join(dir, "executed"))
+}

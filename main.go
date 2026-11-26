@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -53,7 +55,12 @@ func findMarkdownFiles(path string, recursive bool) ([]string, error) {
 // orchestrates the execution process by calling the runner.
 func main() {
 	if err := run(); err != nil {
-		pterm.Error.PrintOnError(err)
+		var breakpointErr *runner.BreakpointError
+		if errors.As(err, &breakpointErr) {
+			fmt.Fprintln(os.Stderr, breakpointErr)
+		} else {
+			pterm.Error.PrintOnError(err)
+		}
 		os.Exit(1)
 	}
 }
@@ -84,6 +91,7 @@ func run() error {
 	}
 	cfg.Env = append(cfg.Env, "WORKING_DIR="+workding_directory)
 
+	var selectedFiles []string
 	for _, file := range markdown_files {
 		// avoid parsing files that aren't markdown
 		extension := path.Ext(file)
@@ -107,11 +115,10 @@ func run() error {
 			pterm.Info.Println(file)
 			continue
 		}
-		// parse and execute if possible
-		err := runner.RunMD(cfg, file)
-		if err != nil {
-			return err
-		}
+		selectedFiles = append(selectedFiles, file)
 	}
-	return nil
+	if cfg.JustList {
+		return nil
+	}
+	return runner.RunFiles(cfg, selectedFiles)
 }

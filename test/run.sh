@@ -129,6 +129,15 @@ run_test "Several breakpoints can be set" \
 run_test "Every breakpoint is validated, not only the last one" \
     "! ./markdown-runner --view ci -B test/1 -B test/0 cases -f '.*'cases/happy.md" || ((FAILED_TESTS++))
 
+run_test "Unreachable breakpoint reports its location and reason" \
+    "./markdown-runner --view ci -s main -B init cases/start_from.md 2>&1 | grep -F 'unreachable breakpoint \"init\": before the start stage'" || ((FAILED_TESTS++))
+
+run_test "A filtered-out file cannot match a breakpoint" \
+    "./markdown-runner --quiet -B start_from@main cases -f 'happy[.]md$' 2>&1 >/dev/null | grep -F 'unreachable breakpoint \"start_from@main\": no such file'" || ((FAILED_TESTS++))
+
+run_test "A breakpoint can target a later selected file" \
+    "./markdown-runner --view ci -r -B other@test cases/recursive" || ((FAILED_TESTS++))
+
 # --- Test Summary ---
 print_msg "33" "\n--- Test Summary ---"
 if [ "${FAILED_TESTS}" -eq 0 ]; then

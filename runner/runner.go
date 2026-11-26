@@ -4,6 +4,7 @@
 package runner
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -18,32 +19,63 @@ import (
 	"github.com/arkmq-org/markdown-runner/view"
 )
 
-// RunMD orchestrates the entire execution process for a single markdown file.
-// It parses the file to get the stages, then iterates through them, executing
-// the chunks in order. It handles parallel execution, dependencies, and teardown
-// stages. If the configuration is set, it will also update the markdown file
-// with the output of the executed chunks.
-//
-// file is the name of the markdown file to execute.
-// It returns an error if any chunk fails and is not part of a teardown stage.
+// RunFiles executes the selected markdown files in order.
+func RunFiles(cfg *config.Config, files []string) error {
+	if len(cfg.Breakpoints) == 0 {
+		for _, file := range files {
+			ui := view.NewView(cfg.View)
+			ui.StartFile(file)
+			stages, err := extractStages(cfg, ui, file)
+			if err != nil {
+				ui.EndFile(file, err)
+				return err
+			}
+			if err := runStages(cfg, ui, file, stages); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	fileStages := make([][]*stage.Stage, len(files))
+	fileViews := make([]view.RunnerView, len(files))
+	for i, file := range files {
+		ui := view.NewView(cfg.View)
+		stages, err := extractStages(cfg, ui, file)
+		if err != nil {
+			return err
+		}
+		fileStages[i] = stages
+		fileViews[i] = ui
+	}
+	if err := validateBreakpoints(cfg, files, fileStages); err != nil {
+		return err
+	}
+	for i, file := range files {
+		ui := fileViews[i]
+		ui.StartFile(file)
+		if err := runStages(cfg, ui, file, fileStages[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RunMD executes a single markdown file.
 func RunMD(cfg *config.Config, file string) error {
-	var tmpDirs map[string]string = make(map[string]string)
+	return RunFiles(cfg, []string{file})
+}
+
+func extractStages(cfg *config.Config, ui view.RunnerView, file string) ([]*stage.Stage, error) {
+	ctx := &runnercontext.Context{Cfg: cfg, RView: ui}
+	return parser.ExtractStages(ctx, path.Base(file), path.Dir(file))
+}
+
+func runStages(cfg *config.Config, ui view.RunnerView, file string, stages []*stage.Stage) error {
+	tmpDirs := make(map[string]string)
 	var terminatingError error
 	markdownDir := path.Dir(file)
 	fileName := path.Base(file)
-	ui := view.NewView(cfg.View)
-	ctx := &runnercontext.Context{
-		Cfg:   cfg,
-		RView: ui,
-	}
-
-	ui.StartFile(file)
-
-	stages, err := parser.ExtractStages(ctx, fileName, markdownDir)
-	if err != nil {
-		ui.EndFile(file, err)
-		return err
-	}
 	if len(stages) == 0 {
 		return nil
 	}
@@ -87,6 +119,82 @@ func RunMD(cfg *config.Config, file string) error {
 
 	ui.EndFile(file, terminatingError)
 	return terminatingError
+}
+
+// BreakpointError reports all CLI breakpoints that execution cannot reach.
+type BreakpointError struct{ error }
+
+// validateBreakpoints follows execution order without consuming the CLI locations.
+func validateBreakpoints(cfg *config.Config, files []string, fileStages [][]*stage.Stage) error {
+	type breakpointStatus struct {
+		reason       string
+		matchedStage bool
+		resolved     bool
+	}
+	statuses := make([]breakpointStatus, len(cfg.Breakpoints))
+	for i := range statuses {
+		statuses[i].reason = "no such file in the selected markdown files"
+		if cfg.Breakpoints[i].File == "" {
+			statuses[i].reason = "unknown stage"
+		}
+	}
+
+	start := config.Config{StartFromLocation: cfg.StartFromLocation}
+	for i, file := range files {
+		for j, bp := range cfg.Breakpoints {
+			if matchesFile(file, bp.File) && !statuses[j].matchedStage {
+				statuses[j].reason = "unknown stage"
+			}
+		}
+		for _, currentStage := range fileStages[i] {
+			stageCopy := *currentStage
+			skip, err := applyStartFrom(&start, file, &stageCopy)
+			if err != nil {
+				return err
+			}
+			for j, bp := range cfg.Breakpoints {
+				status := &statuses[j]
+				if status.resolved || bp.Stage != currentStage.Name || !matchesFile(file, bp.File) {
+					continue
+				}
+				status.matchedStage = true
+				if skip {
+					status.reason = "before the start stage"
+					continue
+				}
+				status.resolved = true
+				status.reason = ""
+				if bp.Chunk == "" {
+					continue
+				}
+				if _, err := findChunkByIdOrIndex(currentStage, bp.Chunk); err != nil {
+					status.reason = fmt.Sprintf("unknown chunk: %v", err)
+				} else if stageCopy.SkipsChunk(bp.Chunk, stageCopy.StartFromChunk) {
+					status.reason = "before the start chunk"
+				}
+			}
+		}
+	}
+
+	var diagnostics []error
+	for i, status := range statuses {
+		if status.reason == "" {
+			continue
+		}
+		bp := cfg.Breakpoints[i]
+		location := bp.Stage
+		if bp.File != "" {
+			location = bp.File + "@" + location
+		}
+		if bp.Chunk != "" {
+			location += "/" + bp.Chunk
+		}
+		diagnostics = append(diagnostics, fmt.Errorf("unreachable breakpoint %q: %s", location, status.reason))
+	}
+	if len(diagnostics) == 0 {
+		return nil
+	}
+	return &BreakpointError{errors.Join(diagnostics...)}
 }
 
 // matchesFile reports whether the markdown file being executed matches the
