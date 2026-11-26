@@ -453,3 +453,33 @@ func TestRunFilesReadsUpdatedMarkdownWithBreakpoint(t *testing.T) {
 	assert.FileExists(t, newMarker)
 	assert.NoFileExists(t, oldMarker)
 }
+
+func TestRunFilesResolvesBreakpointCreatedByEarlierFile(t *testing.T) {
+	for _, tc := range []struct {
+		name, stage, id, replacement string
+	}{
+		{name: "stage", stage: "draft", id: "target", replacement: "deploy"},
+		{name: "chunk", stage: "deploy", id: "draft", replacement: "target"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			first, second := path.Join(dir, "a.md"), path.Join(dir, "b.md")
+			marker := path.Join(dir, "executed")
+			for file, contents := range map[string]string{
+				first:  "```bash {\"stage\":\"setup\"}\nsed -i 's/draft/" + tc.replacement + "/' \"" + second + "\"\n```\n",
+				second: "```bash {\"stage\":\"" + tc.stage + "\",\"id\":\"" + tc.id + "\"}\ntouch \"" + marker + "\"\n```\n",
+			} {
+				if err := os.WriteFile(file, []byte(contents), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg := &config.Config{
+				MarkdownDir: dir, MinutesToTimeout: 1, View: "mock",
+				Breakpoints: []config.Location{{File: "b", Stage: "deploy", Chunk: "target"}},
+			}
+			assert.NoError(t, RunFiles(cfg, []string{first, second}))
+			assert.Empty(t, cfg.Breakpoints)
+			assert.FileExists(t, marker)
+		})
+	}
+}

@@ -37,39 +37,25 @@ func RunFiles(cfg *config.Config, files []string) error {
 		return nil
 	}
 
-	fileStages := make([][]*stage.Stage, len(files))
-	fileViews := make([]view.RunnerView, len(files))
-	for i, file := range files {
+	startFrom := cfg.StartFromLocation
+	fileStages := make([][]*stage.Stage, 0, len(files))
+	if len(files) == 0 {
+		return validateBreakpoints(cfg, files, fileStages, startFrom)
+	}
+	for _, file := range files {
 		ui := view.NewView(cfg.View)
 		stages, err := extractStages(cfg, ui, file)
 		if err != nil {
 			return err
 		}
-		fileStages[i] = stages
-		fileViews[i] = ui
-	}
-	if err := validateBreakpoints(cfg, files, fileStages); err != nil {
-		return err
-	}
-	for i, file := range files {
-		ui := fileViews[i]
-		ui.StartFile(file)
-		if i > 0 {
-			// Earlier commands may have rewritten this file since preflight.
-			stages, err := extractStages(cfg, ui, file)
-			if err != nil {
-				ui.EndFile(file, err)
+		fileStages = append(fileStages, stages)
+		if len(cfg.Breakpoints) > 0 {
+			if err := validateBreakpoints(cfg, files, fileStages, startFrom); err != nil {
 				return err
 			}
-			fileStages[i] = stages
-			if len(cfg.Breakpoints) > 0 {
-				if err := validateBreakpoints(cfg, files[i:], fileStages[i:]); err != nil {
-					ui.EndFile(file, err)
-					return err
-				}
-			}
 		}
-		if err := runStages(cfg, ui, file, fileStages[i]); err != nil {
+		ui.StartFile(file)
+		if err := runStages(cfg, ui, file, stages); err != nil {
 			return err
 		}
 	}
@@ -140,10 +126,13 @@ func runStages(cfg *config.Config, ui view.RunnerView, file string, stages []*st
 type BreakpointError struct{ error }
 
 // validateBreakpoints follows execution order without consuming the CLI locations.
-func validateBreakpoints(cfg *config.Config, files []string, fileStages [][]*stage.Stage) error {
+// Only files parsed for execution contribute stages. Earlier commands can
+// still change the contents of any remaining file.
+func validateBreakpoints(cfg *config.Config, files []string, fileStages [][]*stage.Stage, startFrom config.Location) error {
 	type breakpointStatus struct {
 		reason       string
 		matchedStage bool
+		matchLater   bool
 		resolved     bool
 	}
 	statuses := make([]breakpointStatus, len(cfg.Breakpoints))
@@ -154,13 +143,22 @@ func validateBreakpoints(cfg *config.Config, files []string, fileStages [][]*sta
 		}
 	}
 
-	start := config.Config{StartFromLocation: cfg.StartFromLocation}
+	start := config.Config{StartFromLocation: startFrom}
 	var startErr error
 	for i, file := range files {
 		for j, bp := range cfg.Breakpoints {
-			if matchesFile(file, bp.File) && !statuses[j].matchedStage {
+			if !matchesFile(file, bp.File) {
+				continue
+			}
+			if !statuses[j].matchedStage {
 				statuses[j].reason = "unknown stage"
 			}
+			if i >= len(fileStages) {
+				statuses[j].matchLater = true
+			}
+		}
+		if i >= len(fileStages) {
+			continue
 		}
 		for _, currentStage := range fileStages[i] {
 			stageCopy := *currentStage
@@ -197,7 +195,7 @@ func validateBreakpoints(cfg *config.Config, files []string, fileStages [][]*sta
 
 	var diagnostics []error
 	for i, status := range statuses {
-		if status.reason == "" {
+		if status.reason == "" || (!status.resolved && status.matchLater) {
 			continue
 		}
 		bp := cfg.Breakpoints[i]

@@ -150,6 +150,17 @@ check_invalid_start_and_breakpoints() {
 run_test "An invalid start chunk and unreachable breakpoints are reported on stderr" \
     "check_invalid_start_and_breakpoints" || ((FAILED_TESTS++))
 
+check_dynamic_breakpoint() {
+    mkdir -p test_ws &&
+        cp cases/dynamic_breakpoint/a.md test_ws/a.md &&
+        cp cases/dynamic_breakpoint/b.md.in test_ws/b.md &&
+        ./markdown-runner --view ci -B b@deploy test_ws &&
+        [[ -f test_ws/executed ]]
+}
+
+run_test "An earlier file can create a breakpoint target in a later file" \
+    "check_dynamic_breakpoint" || ((FAILED_TESTS++))
+
 # --- Test Summary ---
 print_msg "33" "\n--- Test Summary ---"
 if [ "${FAILED_TESTS}" -eq 0 ]; then
