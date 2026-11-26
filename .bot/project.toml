@@ -1,0 +1,79 @@
+# The bots' settings for one repository: .bot/project.toml.
+# This one is markdown-runner's (a Go CLI), the project the bots were piloted on.
+
+[project]
+# how the prompts name the project: "You are the coding bot of <description>."
+description = "the markdown-runner repository (a Go CLI)"
+base = "main"
+# files a build leaves in the tree: the coder is told to delete them (the gate refuses binaries anyway)
+build_outputs = ["markdown-runner", "mr-probe"]
+
+[paths]
+# the bots can't touch these (.github/* and .bot/* are always protected)
+protected = ["go.mod", "go.sum", "LICENSE"]
+# a file is a test if it matches `tests`, code if it matches `code` and isn't a test
+code = ["*.go"]
+tests = ["*_test.go", "test/*", "completion/tests/*"]
+
+# Run by the harness, as the sandboxed agent, after every coder round, in this order. The first
+# failure is handed back to the same coder session (twice at most).
+[[gate]]
+name = "gofmt"
+run = 'out=$(gofmt -l $(git ls-files "*.go")); [ -z "$out" ] || { echo "not gofmt-ed: $out"; exit 1; }'
+[[gate]]
+name = "go vet"
+run = "go vet ./..."
+[[gate]]
+name = "go test"
+run = "go test ./..."
+[[gate]]
+name = "integration"
+run = "bash test/run.sh"
+[[gate]]
+name = "completion"
+run = "./completion/tests/run_all_tests.sh"
+
+# The PR's tests run against the base branch's code: they must fail there, or they prove nothing.
+# `when`: only if the PR changes a test matching one of these.
+[[without_change]]
+name = "go test"
+run = "go test ./..."
+[[without_change]]
+name = "integration"
+run = "bash test/run.sh"
+when = ["test/*"]
+
+[agent]
+# commands the agent may run, on top of the read-only basics (ls, cat, grep, git diff...)
+allow = [
+    "Bash(go:*)",
+    "Bash(gofmt:*)",
+    "Bash(bash test/run.sh:*)",
+    "Bash(./completion/tests/run_all_tests.sh:*)",
+    "Bash(./markdown-runner:*)",
+    "Bash(./mr-probe:*)",
+]
+# The agent's environment is EMPTY apart from these (no GitHub token). {home} = its throwaway home.
+# Directories outside {home} must exist and be writable by the agent user (bot.yml creates /tmp/bot-cache).
+[agent.env]
+GOPATH = "{home}/go"
+GOCACHE = "{home}/.cache/go-build"
+GOMODCACHE = "/tmp/bot-cache/gomod"
+GOFLAGS = "-buildvcs=false"
+GOTOOLCHAIN = "local"
+
+[review]
+# step 3 of the reviewer's method: how it exercises the change for real
+try_it = """build the binary (`go build -o ./mr-probe .`) and run it (`./mr-probe ...`) on small \
+markdown files you write under /tmp, or write a throwaway _test.go and `go test -run`"""
+# diff lines flagged in the reviewer's automatic report
+removed_check = '^-\s*.*\b(assert\.|require\.|t\.(Error|Errorf|Fatal|Fatalf|Fail)\b)'
+debug = '^\+.*(\bfmt\.Print(ln|f)?\(\s*"DEBUG|\bTODO\b|\bFIXME\b|\bXXX\b)'
+
+[ci]
+# the workflows the bot dispatches on its branches when its push didn't trigger them
+# (each needs `workflow_dispatch:`); their checks are the CI the bot waits for
+workflows = ["ci.yml", "codeql.yml"]
+# regexes whose first group names a failing test in a failed job's log: the bot then tells two
+# different failures of the same job apart (otherwise: the job's name)
+failure_patterns = ['^\s*--- FAIL: (\S+)']

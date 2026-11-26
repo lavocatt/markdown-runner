@@ -1,4 +1,4 @@
-# The coding bots (.bot/bot.py): a stateless reconciler. Each run reads GitHub's state (labels,
+# The coding bots (.bot/bot.py, settings in .bot/project.toml): a stateless reconciler. Each run reads GitHub's state (labels,
 # commit statuses, marker comments), does the next actions and exits.
 #
 # Two GitHub Apps give the bots their identities: the coder (vars.BOT_CODER_APP_ID,
@@ -7,7 +7,7 @@
 # Without them, both fall back to GITHUB_TOKEN (github-actions[bot]).
 #
 # - A collaborator labels an issue `bot:todo`: it's in the queue, ordered by 👍 votes.
-# - Coder (Claude Code headless) -> deterministic gate -> PR -> CI + CodeQL -> independent bot
+# - Coder (Claude Code or Codex, headless: vars.BOT_AGENT) -> deterministic gate -> PR -> CI + CodeQL -> independent bot
 #   reviewer -> coder answers -> ... -> `bot:ready`: a human reviews. Human remarks go back to the bot.
 # - `bot:stuck`: a budget or the no-progress rule stopped it; remove the label to go on.
 name: bot
@@ -61,13 +61,23 @@ jobs:
       cancel-in-progress: false
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BOT_AGENT: ${{ vars.BOT_AGENT || 'claude' }}            # claude (Claude Code) or codex (OpenAI Codex CLI)
+      # claude: one of the two, a Claude subscription token (`claude setup-token`) or an API key;
+      # vars.BOT_ANTHROPIC_BASE_URL for a gateway
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_BASE_URL: ${{ vars.BOT_ANTHROPIC_BASE_URL }}
+      # codex: an OpenAI API key; vars.BOT_OPENAI_BASE_URL for a gateway (default: OpenAI)
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      BOT_OPENAI_BASE_URL: ${{ vars.BOT_OPENAI_BASE_URL }}
+      BOT_PRICES: ${{ vars.BOT_PRICES }}                     # codex: '{"model": [in, cached, out]}' USD/1M tokens
       BOT_CODER_APP_ID: ${{ vars.BOT_CODER_APP_ID }}
       BOT_CODER_APP_KEY: ${{ secrets.BOT_CODER_APP_KEY }}
       BOT_REVIEWER_APP_ID: ${{ vars.BOT_REVIEWER_APP_ID }}
       BOT_REVIEWER_APP_KEY: ${{ secrets.BOT_REVIEWER_APP_KEY }}
-      BOT_MODEL: ${{ vars.BOT_MODEL || 'sonnet' }}          # the coder
-      BOT_REVIEW_MODEL: ${{ vars.BOT_REVIEW_MODEL || 'opus' }}  # a different model reviews
+      # empty: sonnet / opus with claude, gpt-5.3-codex / gpt-6.2-sol with codex
+      BOT_MODEL: ${{ vars.BOT_MODEL }}                       # the coder
+      BOT_REVIEW_MODEL: ${{ vars.BOT_REVIEW_MODEL }}         # a different model reviews
       BOT_MAX_USD_PER_ROUND: ${{ vars.BOT_MAX_USD_PER_ROUND || '15' }}
       BOT_MAX_USD_PER_PR: ${{ vars.BOT_MAX_USD_PER_PR || '50' }}
       BOT_HUMANS: ${{ vars.BOT_HUMANS || github.repository_owner }}
@@ -76,23 +86,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main                  # the harness always runs main's copy, never a PR's
+          ref: main                  # the harness always runs the base branch's copy, never a PR's
           fetch-depth: 0
           persist-credentials: false # no token in .git/config: the agent can read it
+      # >>> YOUR TOOLCHAIN: what the gate's commands need (here Go). For a Node project, e.g.:
+      #   - uses: actions/setup-node@v4
+      #     with: { node-version: '22' }
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23'
+      # <<<
       - name: Tools
         run: |
-          sudo npm install -g @anthropic-ai/claude-code >/dev/null
-          echo "claude $(claude --version), $(go version), $(python3 --version)"
-          [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || [ "${{ inputs.dry_run }}" = "true" ] || { echo "FATAL: secret CLAUDE_CODE_OAUTH_TOKEN missing"; exit 1; }
+          dry="${{ inputs.dry_run }}"
+          if [ "$BOT_AGENT" = codex ]; then
+            sudo npm install -g @openai/codex@0.172.0 >/dev/null   # the version the harness was tested with
+            echo "$(codex --version), $(python3 --version)"
+            [ -n "$OPENAI_API_KEY" ] || [ "$dry" = "true" ] || { echo "FATAL: secret OPENAI_API_KEY missing"; exit 1; }
+          else
+            sudo npm install -g @anthropic-ai/claude-code >/dev/null
+            echo "claude $(claude --version), $(python3 --version)"
+            [ -n "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY" ] || [ "$dry" = "true" ] || { echo "FATAL: secret CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY missing"; exit 1; }
+          fi
       - name: Sandbox user
         # the agent runs as botrun with an empty environment: no GitHub token, and it can't read
         # the harness's (/proc/<pid>/environ of another user is not readable)
         run: |
           sudo useradd --create-home --shell /bin/bash botrun
-          sudo mkdir -p /tmp/bot-gomod /tmp/bot-logs && sudo chmod 1777 /tmp/bot-gomod /tmp/bot-logs
+          # /tmp/bot-cache: shared caches for the agent (project.toml's [agent.env], e.g. GOMODCACHE)
+          sudo mkdir -p /tmp/bot-cache /tmp/bot-logs && sudo chmod 1777 /tmp/bot-cache /tmp/bot-logs
           # botrun reads the worktrees' shared .git (read-only for it)
           chmod a+x "$HOME" "$(dirname "$GITHUB_WORKSPACE")" "$GITHUB_WORKSPACE"
           chmod -R a+rX "$GITHUB_WORKSPACE"
