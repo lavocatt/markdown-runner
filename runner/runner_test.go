@@ -483,3 +483,23 @@ func TestRunFilesResolvesBreakpointCreatedByEarlierFile(t *testing.T) {
 		})
 	}
 }
+
+func TestRunFilesReportsUnreachableBreakpointsAcrossFiles(t *testing.T) {
+	dir := t.TempDir()
+	first, second := path.Join(dir, "a.md"), path.Join(dir, "b.md")
+	marker := path.Join(dir, "started")
+	contents := "```bash {\"stage\":\"setup\"}\ntouch \"" + marker + "\"\n```\n"
+	for _, file := range []string{first, second} {
+		if err := os.WriteFile(file, []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := &config.Config{
+		MarkdownDir: dir, MinutesToTimeout: 1, View: "mock",
+		Breakpoints: []config.Location{{File: "a", Stage: "typo"}, {File: "b", Stage: "oops"}},
+	}
+	err := RunFiles(cfg, []string{first, second})
+	assert.ErrorContains(t, err, `"a@typo": unknown stage`)
+	assert.ErrorContains(t, err, `"b@oops": unknown stage`)
+	assert.NoFileExists(t, marker)
+}

@@ -38,20 +38,40 @@ func RunFiles(cfg *config.Config, files []string) error {
 	}
 
 	startFrom := cfg.StartFromLocation
-	fileStages := make([][]*stage.Stage, 0, len(files))
+	fileStages := make(map[int][]*stage.Stage, len(files))
 	if len(files) == 0 {
-		return validateBreakpoints(cfg, files, fileStages, startFrom)
+		startErr, diagnostics := validateBreakpoints(cfg, files, fileStages, startFrom)
+		return breakpointError(startErr, diagnostics)
 	}
-	for _, file := range files {
+	for i, file := range files {
 		ui := view.NewView(cfg.View)
 		stages, err := extractStages(cfg, ui, file)
 		if err != nil {
 			return err
 		}
-		fileStages = append(fileStages, stages)
+		fileStages[i] = stages
 		if len(cfg.Breakpoints) > 0 {
-			if err := validateBreakpoints(cfg, files, fileStages, startFrom); err != nil {
-				return err
+			startErr, diagnostics := validateBreakpoints(cfg, files, fileStages, startFrom)
+			abort := startErr != nil || len(diagnostics) > 0
+			if i == 0 || abort {
+				// Inspect later files for diagnostics, then discard their stages.
+				// Earlier commands can still change them before execution.
+				for j := i + 1; j < len(files); j++ {
+					laterStages, err := extractStages(cfg, ui, files[j])
+					if err == nil {
+						fileStages[j] = laterStages
+					}
+				}
+				_, diagnostics = validateBreakpoints(cfg, files, fileStages, startFrom)
+				for j := i + 1; j < len(files); j++ {
+					delete(fileStages, j)
+				}
+				if abort {
+					return breakpointError(startErr, diagnostics)
+				}
+				for _, diagnostic := range diagnostics {
+					fmt.Fprintf(os.Stderr, "warning: %v (based on current files, will recheck before execution)\n", diagnostic)
+				}
 			}
 		}
 		ui.StartFile(file)
@@ -126,9 +146,8 @@ func runStages(cfg *config.Config, ui view.RunnerView, file string, stages []*st
 type BreakpointError struct{ error }
 
 // validateBreakpoints follows execution order without consuming the CLI locations.
-// Only files parsed for execution contribute stages. Earlier commands can
-// still change the contents of any remaining file.
-func validateBreakpoints(cfg *config.Config, files []string, fileStages [][]*stage.Stage, startFrom config.Location) error {
+// Unparsed files may still contain a matching stage.
+func validateBreakpoints(cfg *config.Config, files []string, fileStages map[int][]*stage.Stage, startFrom config.Location) (error, []error) {
 	type breakpointStatus struct {
 		reason       string
 		matchedStage bool
@@ -146,6 +165,7 @@ func validateBreakpoints(cfg *config.Config, files []string, fileStages [][]*sta
 	start := config.Config{StartFromLocation: startFrom}
 	var startErr error
 	for i, file := range files {
+		stages, parsed := fileStages[i]
 		for j, bp := range cfg.Breakpoints {
 			if !matchesFile(file, bp.File) {
 				continue
@@ -153,14 +173,14 @@ func validateBreakpoints(cfg *config.Config, files []string, fileStages [][]*sta
 			if !statuses[j].matchedStage {
 				statuses[j].reason = "unknown stage"
 			}
-			if i >= len(fileStages) {
+			if !parsed {
 				statuses[j].matchLater = true
 			}
 		}
-		if i >= len(fileStages) {
+		if !parsed {
 			continue
 		}
-		for _, currentStage := range fileStages[i] {
+		for _, currentStage := range stages {
 			stageCopy := *currentStage
 			skip, err := applyStartFrom(&start, file, &stageCopy)
 			if err != nil {
@@ -208,6 +228,10 @@ func validateBreakpoints(cfg *config.Config, files []string, fileStages [][]*sta
 		}
 		diagnostics = append(diagnostics, fmt.Errorf("unreachable breakpoint %q: %s", location, status.reason))
 	}
+	return startErr, diagnostics
+}
+
+func breakpointError(startErr error, diagnostics []error) error {
 	if len(diagnostics) == 0 {
 		return startErr
 	}

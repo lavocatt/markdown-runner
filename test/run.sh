@@ -150,16 +150,48 @@ check_invalid_start_and_breakpoints() {
 run_test "An invalid start chunk and unreachable breakpoints are reported on stderr" \
     "check_invalid_start_and_breakpoints" || ((FAILED_TESTS++))
 
-check_dynamic_breakpoint() {
-    mkdir -p test_ws &&
+prepare_breakpoint_files() {
+    rm -rf test_ws &&
+        mkdir -p test_ws &&
         cp cases/dynamic_breakpoint/a.md test_ws/a.md &&
-        cp cases/dynamic_breakpoint/b.md.in test_ws/b.md &&
-        ./markdown-runner --view ci -B b@deploy test_ws &&
-        [[ -f test_ws/executed ]]
+        cp cases/dynamic_breakpoint/b.md.in test_ws/b.md
 }
 
-run_test "An earlier file can create a breakpoint target in a later file" \
+check_dynamic_breakpoint() {
+    local output
+    prepare_breakpoint_files &&
+        output=$(./markdown-runner --view ci -B b@deploy test_ws 2>&1) &&
+        [[ "$output" == *'warning: unreachable breakpoint "b@deploy": unknown stage'*"test_ws/a.md:"* &&
+           -f test_ws/executed ]]
+}
+
+run_test "An earlier file can create a breakpoint target after a pre-run warning" \
     "check_dynamic_breakpoint" || ((FAILED_TESTS++))
+
+check_breakpoints_across_files() {
+    local diagnostics status=0
+    prepare_breakpoint_files || return 1
+    diagnostics=$(./markdown-runner --view ci -B a@typo -B b@oops test_ws 2>&1 >/dev/null) || status=$?
+    [[ "$status" -eq 1 &&
+        "$diagnostics" == *'"a@typo": unknown stage'* &&
+        "$diagnostics" == *'"b@oops": unknown stage'* &&
+        ! -e test_ws/started ]]
+}
+
+run_test "Unreachable breakpoints in separate files are reported together" \
+    "check_breakpoints_across_files" || ((FAILED_TESTS++))
+
+check_persistent_breakpoint_typo() {
+    local output status=0
+    prepare_breakpoint_files || return 1
+    output=$(./markdown-runner --view ci -B b@typo test_ws 2>&1) || status=$?
+    [[ "$status" -eq 1 &&
+        "$output" == *'warning: unreachable breakpoint "b@typo": unknown stage'*"test_ws/a.md:"*'unreachable breakpoint "b@typo": unknown stage'* &&
+        -f test_ws/started && ! -e test_ws/executed ]]
+}
+
+run_test "A later-file typo is warned about before commands and rejected before its file runs" \
+    "check_persistent_breakpoint_typo" || ((FAILED_TESTS++))
 
 # --- Test Summary ---
 print_msg "33" "\n--- Test Summary ---"
