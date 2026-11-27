@@ -1,0 +1,149 @@
+package runner
+
+import (
+	"os"
+	"path"
+	"testing"
+
+	"github.com/arkmq-org/markdown-runner/config"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestCheckBreakpoints(t *testing.T) {
+	tmpDir := t.TempDir()
+	mdContent := "```bash {\"stage\":\"stage1\"}\necho one\n```\n```bash {\"stage\":\"stage2\",\"id\":\"c\"}\necho two\n```\n"
+	mdFile := path.Join(tmpDir, "test.md")
+	assert.NoError(t, os.WriteFile(mdFile, []byte(mdContent), 0o644))
+	failFile := path.Join(tmpDir, "fail.md")
+	assert.NoError(t, os.WriteFile(failFile, []byte("```bash {\"stage\":\"deploy\"}\necho ok\n```\n```bash {\"stage\":\"boom\"}\nfalse\n```\n"), 0o644))
+
+	check := func(files []string, start config.Location, bps ...config.Location) ([]string, error) {
+		cfg := &config.Config{MarkdownDir: tmpDir, MinutesToTimeout: 1, View: "mock",
+			StartFromLocation: start, Breakpoints: bps}
+		return CheckBreakpoints(cfg, files)
+	}
+	one := []string{mdFile}
+
+	t.Run("reachable breakpoints give no warning", func(t *testing.T) {
+		w, err := check(one, config.Location{}, config.Location{Stage: "stage1"}, config.Location{File: "test", Stage: "stage2", Chunk: "c"})
+		assert.NoError(t, err)
+		assert.Empty(t, w)
+	})
+	t.Run("same breakpoint twice", func(t *testing.T) {
+		w, err := check(one, config.Location{}, config.Location{Stage: "stage1"}, config.Location{Stage: "stage1"})
+		assert.NoError(t, err)
+		assert.Empty(t, w)
+	})
+	t.Run("unknown stage", func(t *testing.T) {
+		w, err := check(one, config.Location{}, config.Location{Stage: "stge1"})
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"breakpoint 'stge1' is never reached: unknown stage 'stge1'"}, w)
+	})
+	t.Run("unknown stage when the run would fail", func(t *testing.T) {
+		w, err := check([]string{failFile}, config.Location{}, config.Location{Stage: "deplyo"})
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"breakpoint 'deplyo' is never reached: unknown stage 'deplyo'"}, w)
+	})
+	t.Run("unknown chunk is an error before running", func(t *testing.T) {
+		_, err := check(one, config.Location{}, config.Location{Stage: "stage2", Chunk: "nope"})
+		assert.ErrorContains(t, err, "chunk with ID 'nope' not found in stage 'stage2'")
+	})
+	t.Run("stage before the start stage", func(t *testing.T) {
+		w, err := check(one, config.Location{Stage: "stage2"}, config.Location{Stage: "stage1"})
+		assert.NoError(t, err)
+		assert.Len(t, w, 1)
+		assert.Contains(t, w[0], "'stage1' is never reached")
+		assert.Contains(t, w[0], "before the --start-from stage")
+	})
+	t.Run("unknown start-from stage is named as the cause", func(t *testing.T) {
+		w, err := check(one, config.Location{Stage: "nostage"}, config.Location{Stage: "stage1"})
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"breakpoint 'stage1' is never reached: the --start-from location 'nostage' was not found, so every stage is skipped"}, w)
+	})
+	t.Run("unknown start-from file is named as the cause", func(t *testing.T) {
+		w, err := check(one, config.Location{File: "nofile", Stage: "stage2"}, config.Location{Stage: "stage1"})
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"breakpoint 'stage1' is never reached: the --start-from location 'nofile@stage2' was not found, so every stage is skipped"}, w)
+	})
+	t.Run("no such file", func(t *testing.T) {
+		w, err := check(one, config.Location{}, config.Location{File: "nope", Stage: "stage1"})
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"breakpoint 'nope@stage1' is never reached: no markdown file matching 'nope' is run"}, w)
+	})
+	t.Run("no file is run at all", func(t *testing.T) {
+		w, err := check([]string{}, config.Location{}, config.Location{Stage: "deploy"})
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"breakpoint 'deploy' is never reached: no markdown file is run"}, w)
+	})
+	t.Run("chunk only in the first file that has the stage is valid", func(t *testing.T) {
+		a := path.Join(tmpDir, "a.md")
+		b := path.Join(tmpDir, "b.md")
+		assert.NoError(t, os.WriteFile(a, []byte("```bash {\"stage\":\"deploy\",\"id\":\"x\"}\necho a\n```\n"), 0o644))
+		assert.NoError(t, os.WriteFile(b, []byte("```bash {\"stage\":\"deploy\"}\necho b\n```\n"), 0o644))
+		w, err := check([]string{a, b}, config.Location{}, config.Location{Stage: "deploy", Chunk: "x"})
+		assert.NoError(t, err)
+		assert.Empty(t, w)
+	})
+	t.Run("a file that fails to parse is an error before anything runs", func(t *testing.T) {
+		bad := path.Join(tmpDir, "bad.md")
+		assert.NoError(t, os.WriteFile(bad, []byte("```bash {\"stage\":}\necho x\n```\n"), 0o644))
+		w, err := check([]string{mdFile, bad}, config.Location{}, config.Location{Stage: "typo"})
+		assert.ErrorContains(t, err, "JSON unmarshal error")
+		assert.Empty(t, w)
+	})
+	t.Run("chunk index out of range is an error", func(t *testing.T) {
+		_, err := check(one, config.Location{}, config.Location{Stage: "stage2", Chunk: "5"})
+		assert.ErrorContains(t, err, "out of range")
+	})
+	t.Run("file-qualified chunk missing in that file's stage", func(t *testing.T) {
+		a := path.Join(tmpDir, "a.md")
+		b := path.Join(tmpDir, "b.md")
+		assert.NoError(t, os.WriteFile(a, []byte("```bash {\"stage\":\"deploy\",\"id\":\"x\"}\necho a\n```\n"), 0o644))
+		assert.NoError(t, os.WriteFile(b, []byte("```bash {\"stage\":\"deploy\"}\necho b\n```\n"), 0o644))
+		_, err := check([]string{a, b}, config.Location{}, config.Location{File: "b", Stage: "deploy", Chunk: "x"})
+		assert.ErrorContains(t, err, "chunk with ID 'x' not found in stage 'deploy'")
+	})
+	t.Run("start-from in a later file skips an earlier file's stage", func(t *testing.T) {
+		a := path.Join(tmpDir, "a.md")
+		b := path.Join(tmpDir, "b.md")
+		assert.NoError(t, os.WriteFile(a, []byte("```bash {\"stage\":\"deploy\"}\necho a\n```\n"), 0o644))
+		assert.NoError(t, os.WriteFile(b, []byte("```bash {\"stage\":\"deploy\"}\necho b\n```\n"), 0o644))
+		w, err := check([]string{a, b}, config.Location{File: "b", Stage: "deploy"}, config.Location{File: "a", Stage: "deploy"})
+		assert.NoError(t, err)
+		assert.Len(t, w, 1)
+		assert.Contains(t, w[0], "before the --start-from stage")
+	})
+	t.Run("start-from chunk missing is an error, no warning", func(t *testing.T) {
+		w, err := check(one, config.Location{Stage: "stage2", Chunk: "nope"}, config.Location{Stage: "typo"})
+		assert.Error(t, err)
+		assert.Empty(t, w)
+	})
+	t.Run("chunk before the start-from chunk", func(t *testing.T) {
+		f := path.Join(tmpDir, "chunks.md")
+		assert.NoError(t, os.WriteFile(f, []byte("```bash {\"stage\":\"deploy\",\"id\":\"a\"}\necho a\n```\n```bash {\"stage\":\"deploy\",\"id\":\"b\"}\necho b\n```\n"), 0o644))
+		files := []string{f}
+		w, err := check(files, config.Location{Stage: "deploy", Chunk: "b"}, config.Location{Stage: "deploy", Chunk: "a"})
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"breakpoint 'deploy/a' is never reached: chunk 'a' comes before the --start-from chunk 'b' and is skipped"}, w)
+		w, err = check(files, config.Location{Stage: "deploy", Chunk: "1"}, config.Location{Stage: "deploy", Chunk: "0"})
+		assert.NoError(t, err)
+		assert.Len(t, w, 1)
+		assert.Contains(t, w[0], "comes before the --start-from chunk")
+		for _, ok := range []struct{ start, bp config.Location }{
+			{config.Location{Stage: "deploy", Chunk: "b"}, config.Location{Stage: "deploy", Chunk: "b"}},
+			{config.Location{Stage: "deploy", Chunk: "a"}, config.Location{Stage: "deploy", Chunk: "b"}},
+			{config.Location{Stage: "deploy", Chunk: "b"}, config.Location{Stage: "deploy"}},
+		} {
+			w, err = check(files, ok.start, ok.bp)
+			assert.NoError(t, err)
+			assert.Empty(t, w)
+		}
+	})
+	t.Run("start-from is not consumed", func(t *testing.T) {
+		cfg := &config.Config{MarkdownDir: tmpDir, MinutesToTimeout: 1, View: "mock",
+			StartFromLocation: config.Location{Stage: "stage2"}, Breakpoints: []config.Location{{Stage: "stage2"}}}
+		_, err := CheckBreakpoints(cfg, one)
+		assert.NoError(t, err)
+		assert.Equal(t, "stage2", cfg.StartFromLocation.Stage)
+	})
+}

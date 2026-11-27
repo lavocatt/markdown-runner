@@ -89,6 +89,135 @@ func RunMD(cfg *config.Config, file string) error {
 	return terminatingError
 }
 
+// CheckBreakpoints validates the --break-at breakpoints before anything runs.
+// It parses every file that is about to be run and replays the --start-from
+// logic to know which stages will be executed. It returns one warning per
+// breakpoint that can never be reached, naming it and saying why (unknown
+// stage, stage before the --start-from stage, no such file). A breakpoint on a
+// chunk that doesn't exist in a stage that will run is an error, as it already
+// was when that stage was reached.
+// A file that can't be parsed is an error too: the run would fail on it
+// anyway, so it fails before anything runs.
+func CheckBreakpoints(cfg *config.Config, files []string) ([]string, error) {
+	if len(cfg.Breakpoints) == 0 {
+		return nil, nil
+	}
+	visits, startUnmatched, err := replayStages(cfg, files)
+	if err != nil {
+		return nil, err
+	}
+	var warnings []string
+	for _, bp := range cfg.Breakpoints {
+		why, err := unreachableReason(cfg, bp, visits, startUnmatched)
+		if err != nil {
+			return nil, err
+		}
+		if why != "" {
+			warnings = append(warnings, fmt.Sprintf("breakpoint '%s' is never reached: %s", bp, why))
+		}
+	}
+	return warnings, nil
+}
+
+// stageVisit is a stage of a file as the run would meet it.
+type stageVisit struct {
+	file, stage string
+	skipped     bool
+	s           *stage.Stage
+}
+
+// replayStages parses the files and replays the --start-from logic on a copy of
+// the configuration. It also tells whether the --start-from location was never
+// matched by a stage, in which case every stage is skipped.
+func replayStages(cfg *config.Config, files []string) ([]stageVisit, bool, error) {
+	var visits []stageVisit
+	sim := *cfg // simulate --start-from without consuming the real one
+	for _, file := range files {
+		ctx := &runnercontext.Context{Cfg: &sim, RView: view.NewView("mock")}
+		stages, err := parser.ExtractStages(ctx, path.Base(file), path.Dir(file))
+		if err != nil {
+			return nil, false, err
+		}
+		for _, st := range stages {
+			skip, err := applyStartFrom(&sim, file, st)
+			if err != nil {
+				return nil, false, err
+			}
+			visits = append(visits, stageVisit{file, st.Name, skip, st})
+		}
+	}
+	return visits, sim.StartFromLocation.Stage != "", nil
+}
+
+// findBreakpointStage finds the stage a breakpoint will be consumed by at run
+// time: the first matching stage that isn't skipped. It also tells whether a
+// file matching the breakpoint was seen and whether a matching stage was skipped.
+func findBreakpointStage(bp config.Location, visits []stageVisit) (found *stage.Stage, fileSeen, skipped bool) {
+	for _, v := range visits {
+		if !matchesFile(v.file, bp.File) {
+			continue
+		}
+		fileSeen = true
+		if v.stage != bp.Stage {
+			continue
+		}
+		if v.skipped {
+			skipped = true
+			continue
+		}
+		return v.s, fileSeen, skipped
+	}
+	return nil, fileSeen, skipped
+}
+
+// unreachableReason returns why a breakpoint can never be reached, or "" when
+// it can. A chunk that doesn't exist in the stage that will run is an error.
+func unreachableReason(cfg *config.Config, bp config.Location, visits []stageVisit, startUnmatched bool) (string, error) {
+	st, fileSeen, skipped := findBreakpointStage(bp, visits)
+	if st != nil {
+		if bp.Chunk == "" {
+			return "", nil
+		}
+		bpChunk, err := findChunkByIdOrIndex(st, bp.Chunk)
+		if err != nil {
+			return "", err
+		}
+		// The chunks before the --start-from chunk are skipped before the
+		// breakpoint check, so the breakpoint can't fire.
+		if st.StartFromChunk != "" {
+			startChunk, err := findChunkByIdOrIndex(st, st.StartFromChunk)
+			if err != nil {
+				return "", err
+			}
+			if chunkPosition(st, bpChunk) < chunkPosition(st, startChunk) {
+				return fmt.Sprintf("chunk '%s' comes before the --start-from chunk '%s' and is skipped", bp.Chunk, st.StartFromChunk), nil
+			}
+		}
+		return "", nil
+	}
+	switch {
+	case !fileSeen && bp.File == "":
+		return "no markdown file is run", nil
+	case !fileSeen:
+		return fmt.Sprintf("no markdown file matching '%s' is run", bp.File), nil
+	case skipped && startUnmatched:
+		return fmt.Sprintf("the --start-from location '%s' was not found, so every stage is skipped", cfg.StartFromLocation), nil
+	case skipped:
+		return fmt.Sprintf("stage '%s' comes before the --start-from stage and is skipped", bp.Stage), nil
+	}
+	return fmt.Sprintf("unknown stage '%s'", bp.Stage), nil
+}
+
+// chunkPosition returns the index of a chunk in its stage.
+func chunkPosition(s *stage.Stage, c *chunk.ExecutableChunk) int {
+	for i, other := range s.Chunks {
+		if other == c {
+			return i
+		}
+	}
+	return -1
+}
+
 // matchesFile reports whether the markdown file being executed matches the
 // file part of a file@stage specification. An empty specification matches any file.
 // Check various forms: full path, basename, basename without extension.

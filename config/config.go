@@ -47,6 +47,18 @@ type Location struct {
 	Chunk string
 }
 
+// String formats the location the way it is given on the command line.
+func (l Location) String() string {
+	s := l.Stage
+	if l.File != "" {
+		s = l.File + "@" + s
+	}
+	if l.Chunk != "" {
+		s += "/" + l.Chunk
+	}
+	return s
+}
+
 // ParseLocation parses a --start-from or --break-at value: stage,
 // stage/chunkID or file@stage/chunkID.
 func ParseLocation(value string) (Location, error) {
